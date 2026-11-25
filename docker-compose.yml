@@ -1,0 +1,25 @@
+# Full stack: PostgreSQL + API + web.  Usage:  SECRET_KEY=$(openssl rand -hex 32) docker compose up --build
+services:
+  db:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: crisistwin, POSTGRES_PASSWORD: change_me, POSTGRES_DB: crisistwin }
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U crisistwin"], interval: 5s, retries: 10 }
+  api:
+    build: ./backend
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+psycopg://crisistwin:change_me@db:5432/crisistwin
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY}
+      CORS_ORIGINS: '["http://localhost:3000"]'
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    depends_on: { db: { condition: service_healthy } }
+    ports: ["8000:8000"]
+  web:
+    build:
+      context: ./frontend
+      args: { NEXT_PUBLIC_API_URL: "http://localhost:8000/api/v1" }
+    depends_on: [api]
+    ports: ["3000:3000"]
+volumes: { pgdata: {} }
