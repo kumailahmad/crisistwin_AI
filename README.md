@@ -89,3 +89,20 @@ Administrators sign in at **`/staff-access`** (not linked anywhere, `noindex`, l
 
 ### Admin without running commands
 Set `ADMIN_EMAIL` and `ADMIN_PASSWORD` (10+ characters) in the backend's environment variables (e.g. Vercel). The administrator is created automatically on the next start; an existing account's password is never overwritten. After the first successful sign-in you may delete `ADMIN_PASSWORD` from the environment.
+
+## Multi-Platform Ecosystem, PWA & Android Packaging
+
+- **Unified API & OpenAPI Docs**: All web, PWA, and mobile experiences share the unified REST backend at `/api/v1/*` with `HttpOnly` cookie sessions (`SameSite=Lax` on HTTP localhost, `SameSite=None; Secure; Partitioned` on HTTPS) and CSRF origin validation. Inspect `/api/v1/openapi.json` for the live OpenAPI 3.1 schema.
+- **Admin Command Center (`/admin/*`)**: Separate operational sidebar covering Overview, Incident Management (triage, team assignment, duplicate linking, timeline history, citizen flags), Disaster Monitoring Map (`/admin/monitoring`), Public Alerts (`/admin/alerts`), Emergency Resources (`hospital`, `shelter`, `rescue_center`, `fire_service`, `ambulance`, capacity, availability), AI Control (`/admin/ai`), Districts, Datasets, Simulations (side-by-side comparison & CSV/PDF), Analytics (`/reports`), Users (search & one-time reset codes), Audit Logs, and System Settings (`/admin/settings`).
+- **Citizen App**: Dedicated citizen navigation & mobile bottom tab bar (`Home`, `Map`, `Report`, `Alerts`), `/alerts`, `/notifications` with header unread badge, `/profile` (home district, notification preferences, approximate-location privacy toggle, password change, account deletion), offline incident draft queue in `/report`, nearest-first geolocation sorting in `/resources`, and English / Urdu / Balochi (`en`/`ur`/`bal`) AI assistant grounded in stored records.
+- **PWA & Capacitor Android APK**:
+  - Includes Next.js App Router `manifest.ts` (`/manifest.webmanifest`), PNG icons (`192x192`, `512x512`, padded maskable `512x512`, `180x180` Apple touch icon), `public/sw.js`, `/offline` fallback, and install prompt banner/button.
+  - To wrap as a native Android APK with Capacitor (`frontend/capacitor.config.ts`):
+    ```bash
+    cd frontend
+    npm install @capacitor/core @capacitor/cli @capacitor/android
+    npx cap add android
+    # Point CAPACITOR_SERVER_URL to your deployed HTTPS CrisisTwin URL (or bundle static assets)
+    CAPACITOR_SERVER_URL=https://crisistwin-ai.vercel.app npx cap sync android
+    npx cap open android
+    ```

@@ -1,0 +1,10 @@
+{
+  "/api/v1/[...path]/route": "app/api/v1/[...path]/route.js",
+  "/page": "app/page.js",
+  "/login/page": "app/login/page.js",
+  "/offline/page": "app/offline/page.js",
+  "/(app)/dashboard/page": "app/(app)/dashboard/page.js",
+  "/(app)/report/page": "app/(app)/report/page.js",
+  "/(app)/emergency/page": "app/(app)/emergency/page.js",
+  "/(app)/admin/resources/page": "app/(app)/admin/resources/page.js"
+}
