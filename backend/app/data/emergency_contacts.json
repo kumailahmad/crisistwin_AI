@@ -1,0 +1,481 @@
+{
+ "retrieved": "2026-11-25",
+ "disclaimer": "Numbers were copied from the sources shown on the retrieval date and have NOT been verified by calling them. Phone numbers change. Confirm with the issuing department before relying on them in an emergency.",
+ "helplines": [
+  {
+   "id": "police-15",
+   "name": "Police emergency",
+   "number": "15",
+   "category": "police",
+   "scope": "Balochistan / Pakistan",
+   "confidence": "official",
+   "note": "The Balochistan Home Department website directs people to call Police 15 in an emergency.",
+   "source": {
+    "title": "Home Department, Government of Balochistan",
+    "url": "https://home.balochistan.gov.pk"
+   }
+  },
+  {
+   "id": "rescue-1122",
+   "name": "Rescue / ambulance 1122",
+   "number": "1122",
+   "category": "rescue",
+   "scope": "Quetta and some highways (coverage is limited)",
+   "confidence": "secondary",
+   "note": "Balochistan's 1122 service is not province-wide: reports describe it in Quetta and along highways. Confirm coverage for your district.",
+   "source": {
+    "title": "Rescue 1122 (Wikipedia) and Express Tribune, 'Rapid reaction teams formed in Quetta'",
+    "url": "https://tribune.com.pk/story/2189122/entertainment?amp=1"
+   }
+  },
+  {
+   "id": "edhi-115",
+   "name": "Edhi ambulance",
+   "number": "115",
+   "category": "ambulance",
+   "scope": "Listed for Quetta and other major cities",
+   "confidence": "secondary",
+   "note": "Charity ambulance service. Availability varies by area.",
+   "source": {
+    "title": "Emergency medical services in Pakistan (Wikipedia)",
+    "url": "https://en.wikipedia.org/wiki/Emergency_medical_services_in_Pakistan"
+   }
+  },
+  {
+   "id": "pehl-911",
+   "name": "Pakistan Emergency Helpline (reported)",
+   "number": "911",
+   "category": "national",
+   "scope": "National; reported activated Aug 2025",
+   "confidence": "unconfirmed",
+   "note": "Reported by the press as activated nationwide by the IT ministry during the 2025 floods. Availability in Balochistan is not confirmed.",
+   "source": {
+    "title": "ProPakistani: Govt launches new emergency helpline nationwide",
+    "url": "https://propakistani.pk/2025/08/16/govt-launches-new-emergency-helpline-nationwide/"
+   }
+  },
+  {
+   "id": "pdma-bal-office",
+   "name": "PDMA Balochistan (office line)",
+   "number": "+92 81 288 0245",
+   "category": "disaster",
+   "scope": "Provincial Disaster Management Authority, Quetta",
+   "confidence": "outdated",
+   "note": "From a 2011 UNHCR directory (Airport Road, near Chiltan Housing Scheme, Quetta). Verify with PDMA Balochistan before relying on it. Do not confuse with 1700, which is the Khyber Pakhtunkhwa PDMA helpline.",
+   "source": {
+    "title": "UNHCR directory: PDMA Balochistan (2011)",
+    "url": "https://www.unhcr.org/node/4528"
+   }
+  },
+  {
+   "id": "igp-complaints",
+   "name": "IG Police Balochistan: complaints (non-emergency)",
+   "number": "111-775-544 / 081; WhatsApp 0304-3470110",
+   "category": "police",
+   "scope": "Complaints to the Inspector General's office",
+   "confidence": "secondary",
+   "note": "Reported in a news article citing an official statement. For emergencies call 15.",
+   "source": {
+    "title": "Quetta Voice",
+    "url": "https://quettavoice.com/?p=39721"
+   }
+  }
+ ],
+ "hospitals_source": {
+  "title": "Health Department, Government of Balochistan: hospital contact list (28 Oct 2025)",
+  "url": "https://health.balochistan.gov.pk/wp-content/uploads/2025/10/Website-Information-MS-Info-Website-28oct2025.pdf"
+ },
+ "hospitals": [
+  {
+   "name": "DHQ Hospital Awaran",
+   "district": "Awaran",
+   "district_as_listed": "Awaran",
+   "phone": "0333-7876758"
+  },
+  {
+   "name": "DHQ Hospital Barkhan",
+   "district": "Barkhan",
+   "district_as_listed": "Barkan",
+   "phone": "0348-2632989"
+  },
+  {
+   "name": "DHQ Hospital Prince Fahad Dalbindin Chagai",
+   "district": "Chagai",
+   "district_as_listed": "Chagai",
+   "phone": "0333-0380335"
+  },
+  {
+   "name": "THQ Hospital Nokundi",
+   "district": "Chagai",
+   "district_as_listed": "Chagai",
+   "phone": "0333-0380335"
+  },
+  {
+   "name": "Teaching Hospital Chaman",
+   "district": "Chaman",
+   "district_as_listed": "Chaman",
+   "phone": "0300-8178720"
+  },
+  {
+   "name": "DHQ Hospital Dera Bugti",
+   "district": "Dera Bugti",
+   "district_as_listed": "Dera Bugti",
+   "phone": "0333-7843355"
+  },
+  {
+   "name": "PPL Hospital Sui",
+   "district": "Dera Bugti",
+   "district_as_listed": "Dera Bugti",
+   "phone": "0334-2423712"
+  },
+  {
+   "name": "DHQ Hospital Dukki",
+   "district": "Duki",
+   "district_as_listed": "Dukki",
+   "phone": "0333-7892546"
+  },
+  {
+   "name": "Mir Abdul Ghafoor Kalmati Teaching Hospital",
+   "district": "Gwadar",
+   "district_as_listed": "Gawadar",
+   "phone": "0323-3463905"
+  },
+  {
+   "name": "Pak Oman Pasni Hospital Gwadar (50 Bedded)",
+   "district": "Gwadar",
+   "district_as_listed": "Gwadar",
+   "phone": "0333-7804298"
+  },
+  {
+   "name": "GDA Hospital Gwadar (50 Bedded)",
+   "district": "Gwadar",
+   "district_as_listed": "Gwadar",
+   "phone": "0333-5038273"
+  },
+  {
+   "name": "DHQ Hospital Harnai",
+   "district": "Harnai",
+   "district_as_listed": "Harnai",
+   "phone": "0332-7814556"
+  },
+  {
+   "name": "Jam Ghulam Qadir Govt Teaching Hospital",
+   "district": "Hub",
+   "district_as_listed": "Hub",
+   "phone": "0332-7945570"
+  },
+  {
+   "name": "DHQ Hospital Jaffarabad",
+   "district": "Jaffarabad",
+   "district_as_listed": "Jaffarabad",
+   "phone": "0332-7866543"
+  },
+  {
+   "name": "DHQ Hospital Gandawah",
+   "district": "Jhal Magsi",
+   "district_as_listed": "Jhal Magsi",
+   "phone": "0333-7509911"
+  },
+  {
+   "name": "DHQ Hospital Dhadar",
+   "district": "Kachhi",
+   "district_as_listed": "Kachhi Bolan",
+   "phone": "0331-2937962"
+  },
+  {
+   "name": "Civil Hospital Bhag",
+   "district": "Kachhi",
+   "district_as_listed": "Kachhi Bolan",
+   "phone": "0312-2237496"
+  },
+  {
+   "name": "Civil Hospital Mach",
+   "district": "Kachhi",
+   "district_as_listed": "Kachhi Bolan",
+   "phone": "0333-7700771"
+  },
+  {
+   "name": "Teaching Hospital Kalat",
+   "district": "Kalat",
+   "district_as_listed": "Kalat",
+   "phone": "0333-8868988"
+  },
+  {
+   "name": "50 Bedded Prince Karim Hospital Kalat",
+   "district": "Kalat",
+   "district_as_listed": "Kalat",
+   "phone": "0342-8017667"
+  },
+  {
+   "name": "Teaching Hospital Kech",
+   "district": "Kech",
+   "district_as_listed": "Kech Turbat",
+   "phone": "0313-8252529"
+  },
+  {
+   "name": "Teaching Hospital Kharan",
+   "district": "Kharan",
+   "district_as_listed": "Kharan",
+   "phone": "0336-2463826"
+  },
+  {
+   "name": "Teaching Hospital Khuzdar",
+   "district": "Khuzdar",
+   "district_as_listed": "Khuzdar",
+   "phone": "0333-7878660"
+  },
+  {
+   "name": "Civil Hospital Shaheed Nawabzada Sikandar Khan Zehri",
+   "district": "Khuzdar",
+   "district_as_listed": "Khuzdar",
+   "phone": "0334-4411107"
+  },
+  {
+   "name": "Civil Hospital Nall",
+   "district": "Khuzdar",
+   "district_as_listed": "Khuzdar",
+   "phone": "0333-7971104"
+  },
+  {
+   "name": "25 Bedded Hospital Khuzdar",
+   "district": "Khuzdar",
+   "district_as_listed": "Khuzdar",
+   "phone": "0333-7971104"
+  },
+  {
+   "name": "THQ Wadh",
+   "district": "Khuzdar",
+   "district_as_listed": "Khuzdar",
+   "phone": "0335-0327874"
+  },
+  {
+   "name": "DHQ Hospital Killa Abdullah",
+   "district": "Qilla Abdullah",
+   "district_as_listed": "Killa Abdullah",
+   "phone": "0313-8611281"
+  },
+  {
+   "name": "Teaching Hospital Killa Saifullah",
+   "district": "Qilla Saifullah",
+   "district_as_listed": "Killa Saifullah",
+   "phone": "0345-8336594"
+  },
+  {
+   "name": "THQ Hospital Muslim Bagh",
+   "district": "Qilla Saifullah",
+   "district_as_listed": "Killa Saifullah",
+   "phone": "0341-8088899"
+  },
+  {
+   "name": "DHQ Hospital Kohlu",
+   "district": "Kohlu",
+   "district_as_listed": "Kohlu",
+   "phone": "0333-7925667"
+  },
+  {
+   "name": "DHQ Hospital Uthal",
+   "district": "Lasbela",
+   "district_as_listed": "Lasbella",
+   "phone": "0313-8245944"
+  },
+  {
+   "name": "Civil Hospital Bela",
+   "district": "Lasbela",
+   "district_as_listed": "Lasbella",
+   "phone": "0345-8892384"
+  },
+  {
+   "name": "Teaching Hospital Loralai",
+   "district": "Loralai",
+   "district_as_listed": "Loralai",
+   "phone": "0333-8037779"
+  },
+  {
+   "name": "DHQ Hospital Mastung",
+   "district": "Mastung",
+   "district_as_listed": "Mastung",
+   "phone": "0333-7803428"
+  },
+  {
+   "name": "Shaheed Nawab Ghous Bakhsh Raisani Hospital Mastung (50 Bedded)",
+   "district": "Mastung",
+   "district_as_listed": "Mastung",
+   "phone": "0333-7803310"
+  },
+  {
+   "name": "DHQ Hospital Musakhail",
+   "district": "Musakhel",
+   "district_as_listed": "Musa Khail",
+   "phone": "0331-8038024"
+  },
+  {
+   "name": "Teaching Hospital DM Jamali",
+   "district": "Nasirabad",
+   "district_as_listed": "Naseerabad",
+   "phone": "0334-2678349"
+  },
+  {
+   "name": "Mir Gul Khan Naseer Teaching Hospital",
+   "district": "Nushki",
+   "district_as_listed": "Nushki",
+   "phone": "0333-7826490"
+  },
+  {
+   "name": "Teaching Hospital Panjgur",
+   "district": "Panjgur",
+   "district_as_listed": "Panjgur",
+   "phone": "0333-7811198"
+  },
+  {
+   "name": "50 Bedded Hospital Khudabadan",
+   "district": "Panjgur",
+   "district_as_listed": "Panjgur",
+   "phone": "0332-2392650"
+  },
+  {
+   "name": "Teaching Hospital Pishin",
+   "district": "Pishin",
+   "district_as_listed": "Pishin",
+   "phone": "0334-2468728"
+  },
+  {
+   "name": "THQ Hospital Khanozai",
+   "district": "Pishin",
+   "district_as_listed": "Pishin",
+   "phone": "0307-3908878"
+  },
+  {
+   "name": "THQ Bershor",
+   "district": "Pishin",
+   "district_as_listed": "Pishin",
+   "phone": "0335-3700087"
+  },
+  {
+   "name": "Balochistan Institute of Nephrology (Kidney Hospital)",
+   "district": "Quetta",
+   "district_as_listed": "Quetta",
+   "phone": "0345-5096000"
+  },
+  {
+   "name": "Bolan Medical Complex Hospital",
+   "district": "Quetta",
+   "district_as_listed": "Quetta",
+   "phone": "0331-9388387"
+  },
+  {
+   "name": "Fatima Jinnah Chest & General Hospital",
+   "district": "Quetta",
+   "district_as_listed": "Quetta",
+   "phone": "0333-7801105"
+  },
+  {
+   "name": "Mohtarma Shaheed Benazir Bhutto General Hospital",
+   "district": "Quetta",
+   "district_as_listed": "Quetta",
+   "phone": "0333-3445054"
+  },
+  {
+   "name": "Mufthi Mehmood Memorial Hospital Kuchlak",
+   "district": "Quetta",
+   "district_as_listed": "Quetta",
+   "phone": "0312-8048645"
+  },
+  {
+   "name": "Helpers Eye Hospital",
+   "district": "Quetta",
+   "district_as_listed": "Quetta",
+   "phone": "0300-2101975"
+  },
+  {
+   "name": "Psychiatry Institute of Behavior & Mental Sciences",
+   "district": "Quetta",
+   "district_as_listed": "Quetta",
+   "phone": "0332-3757908"
+  },
+  {
+   "name": "Sandeman Provincial Hospital",
+   "district": "Quetta",
+   "district_as_listed": "Quetta",
+   "phone": "0311-8005077"
+  },
+  {
+   "name": "Sheikh Khalifa Bin Zayed Hospital Saryab",
+   "district": "Quetta",
+   "district_as_listed": "Quetta",
+   "phone": "0331-9381512"
+  },
+  {
+   "name": "Sheikh Mohamed Bin Zayed Al Nahyan Institute of Cardiology",
+   "district": "Quetta",
+   "district_as_listed": "Quetta",
+   "phone": null
+  },
+  {
+   "name": "DHQ Hospital Sherani",
+   "district": "Sherani",
+   "district_as_listed": "Sherani",
+   "phone": "0333-7862731"
+  },
+  {
+   "name": "Teaching Hospital Sibi",
+   "district": "Sibi",
+   "district_as_listed": "Sibi",
+   "phone": "0335-3846086"
+  },
+  {
+   "name": "DHQ Hospital Sohbat Pur",
+   "district": "Sohbatpur",
+   "district_as_listed": "Sohbat Pur",
+   "phone": "0332-2855134"
+  },
+  {
+   "name": "DHQ Hospital Surab",
+   "district": "Surab",
+   "district_as_listed": "Surab",
+   "phone": "0312-8234773"
+  },
+  {
+   "name": "50 Bedded Labour Hospital Usta Muhammad",
+   "district": "Usta Muhammad",
+   "district_as_listed": "Usta Muhammad",
+   "phone": "0312-3289728"
+  },
+  {
+   "name": "THQ Hospital Usta Muhammad",
+   "district": "Usta Muhammad",
+   "district_as_listed": "Usta Muhammad",
+   "phone": "0333-3701444"
+  },
+  {
+   "name": "DHQ Hospital Washuk",
+   "district": "Washuk",
+   "district_as_listed": "Washuk",
+   "phone": "0334-8963833"
+  },
+  {
+   "name": "THQ Hospital Basima",
+   "district": "Washuk",
+   "district_as_listed": "Washuk",
+   "phone": "0333-8724818"
+  },
+  {
+   "name": "Teaching Hospital Zhob",
+   "district": "Zhob",
+   "district_as_listed": "Zhob",
+   "phone": "0300-3882007"
+  },
+  {
+   "name": "Teaching Hospital Ziarat",
+   "district": "Ziarat",
+   "district_as_listed": "Ziarat",
+   "phone": "0300-4500304"
+  },
+  {
+   "name": "THQ Hospital Sanjavi",
+   "district": "Ziarat",
+   "district_as_listed": "Ziarat",
+   "phone": "0333-6395936"
+  }
+ ],
+ "district_changes_note": "In July 2026 the Balochistan government notified a restructuring to 11 divisions and 41 districts (e.g. Quetta split into East and West Quetta). Bundled district boundaries predate this and cover 26 districts."
+}
