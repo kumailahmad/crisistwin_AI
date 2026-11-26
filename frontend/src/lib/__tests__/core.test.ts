@@ -110,8 +110,8 @@ test("password hashing and JWT signing enforce cryptographic integrity", () => {
   assert.equal(verifyPassword("StrongPass#2026", h), true);
   assert.equal(verifyPassword("WrongPass", h), false);
 
-  const token = createAccessToken(42, "admin");
+  const token = createAccessToken(42, "admin", "admin@crisistwin.test", "Coordinator");
   const decoded = decodeAccessToken(token);
-  assert.deepEqual(decoded, { sub: 42, role: "admin" });
+  assert.deepEqual(decoded, { sub: 42, role: "admin", email: "admin@crisistwin.test", full_name: "Coordinator" });
   assert.equal(decodeAccessToken(token + "tampered"), null);
 });

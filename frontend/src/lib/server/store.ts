@@ -159,7 +159,72 @@ export function defaultAiConfig(): AiConfig {
   };
 }
 
+function storeFilePath(): string {
+  return process.env.STORE_PATH?.trim() || "/tmp/crisistwin-store.json";
+}
+
+type PersistedMedia = Omit<StoredMedia, "data"> & { data_b64: string };
+type PersistedIncident = Omit<StoredIncident, "media_blobs"> & { media_blobs: PersistedMedia[] };
+type PersistedStore = Omit<Store, "boundaries" | "incidents"> & {
+  boundaries: [number, StoredBoundary][];
+  incidents: PersistedIncident[];
+};
+
+export function saveStore(store: Store): void {
+  try {
+    const payload: PersistedStore = {
+      ...store,
+      boundaries: Array.from(store.boundaries.entries()),
+      incidents: store.incidents.map((inc) => ({
+        ...inc,
+        media_blobs: inc.media_blobs.map(({ data, ...rest }) => ({
+          ...rest,
+          data_b64: data.toString("base64"),
+        })),
+      })),
+    };
+    const file = storeFilePath();
+    const tmp = `${file}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(payload), "utf8");
+    fs.renameSync(tmp, file);
+  } catch {
+    /* keep in-memory store functional if filesystem is read-only */
+  }
+}
+
+function loadPersistedStore(): Store | null {
+  try {
+    const file = storeFilePath();
+    if (!fs.existsSync(file)) return null;
+    const raw = JSON.parse(fs.readFileSync(file, "utf8")) as PersistedStore;
+    if (!raw || !Array.isArray(raw.users) || !Array.isArray(raw.districts) || !raw.nextId) return null;
+    return {
+      ...raw,
+      boundaries: new Map<number, StoredBoundary>(raw.boundaries ?? []),
+      incidents: (raw.incidents ?? []).map((inc) => ({
+        ...inc,
+        media_blobs: (inc.media_blobs ?? []).map(({ data_b64, ...rest }) => ({
+          ...rest,
+          data: Buffer.from(data_b64 || "", "base64"),
+        })),
+      })),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function createInitialStore(): Store {
+  const persisted = loadPersistedStore();
+  if (persisted) {
+    // Re-sync environment-derived provider/SMTP flags on startup without wiping user data
+    const freshAi = defaultAiConfig();
+    persisted.aiConfig = { ...persisted.aiConfig, groq_configured: freshAi.groq_configured, gemini_configured: freshAi.gemini_configured };
+    persisted.settings.smtp_configured = Boolean(process.env.SMTP_HOST?.trim());
+    persisted.settings.ai_provider_configured = Boolean(persisted.aiConfig.provider_active);
+    return persisted;
+  }
+
   const aiCfg = defaultAiConfig();
   const store: Store = {
     users: [],
@@ -183,7 +248,7 @@ function createInitialStore(): Store {
       allow_public_registration: true,
       smtp_configured: Boolean(process.env.SMTP_HOST?.trim()),
       ai_provider_configured: Boolean(aiCfg.provider_active),
-      persistence_mode: "in-memory-session",
+      persistence_mode: "file-backed-tmp",
       updated_at: new Date().toISOString(),
     },
     auditLogs: [],
@@ -270,6 +335,7 @@ function createInitialStore(): Store {
     });
   }
 
+  saveStore(store);
   return store;
 }
 

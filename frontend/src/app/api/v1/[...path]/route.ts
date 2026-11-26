@@ -28,6 +28,7 @@ import {
   newIncidentCode,
   notifyPublishedAlert,
   pushNotification,
+  saveStore,
   type Store,
   type StoredIncident,
   type StoredUser,
@@ -134,8 +135,33 @@ function getUser(req: NextRequest, store: Store): StoredUser | NextResponse {
   }
   const claims = decodeAccessToken(token);
   if (!claims) return err(401, "Invalid or expired token");
-  const user = store.users.find((u) => u.id === claims.sub);
-  if (!user || !user.is_active) return err(401, "Inactive or unknown user");
+  let user = store.users.find((u) => u.id === claims.sub || (claims.email ? u.email === claims.email : false));
+  if (user && !user.is_active) return err(401, "Inactive or unknown user");
+  if (!user) {
+    if (!claims.email) return err(401, "Inactive or unknown user");
+    // Re-hydrate active user from cryptographically verified JWT claims when scaling across Cloud Run instances
+    const nextId = Math.max(store.nextId.user, claims.sub + 1);
+    store.nextId.user = nextId;
+    user = {
+      id: claims.sub,
+      email: claims.email,
+      hashed_password: "!jwt-rehydrated",
+      full_name: claims.full_name ?? null,
+      role: claims.role === "admin" ? "admin" : "user",
+      is_active: true,
+      email_verified: true,
+      email_verify_token_hash: null,
+      reset_token_hash: null,
+      reset_expires_at: null,
+      phone: null,
+      district_id: null,
+      notification_prefs: { district_alerts: true, incident_updates: true, public_safety: true },
+      privacy_prefs: { share_approximate_only: false },
+      created_at: new Date().toISOString(),
+    };
+    store.users.push(user);
+    saveStore(store);
+  }
   return user;
 }
 
@@ -145,7 +171,7 @@ function getOptionalUser(req: NextRequest, store: Store): StoredUser | null {
   if (!token) return null;
   const claims = decodeAccessToken(token);
   if (!claims) return null;
-  const user = store.users.find((u) => u.id === claims.sub);
+  const user = store.users.find((u) => u.id === claims.sub || (claims.email ? u.email === claims.email : false));
   return user && user.is_active ? user : null;
 }
 
@@ -271,7 +297,7 @@ function clearSessionCookie(res: NextResponse, req: NextRequest): NextResponse {
   return res;
 }
 
-async function handle(req: NextRequest, context: { params: Promise<{ path: string[] }> }): Promise<NextResponse> {
+async function handleInner(req: NextRequest, context: { params: Promise<{ path: string[] }> }): Promise<NextResponse> {
   const { path: segs } = await context.params;
   const method = req.method.toUpperCase();
   const store = getStore();
@@ -358,7 +384,7 @@ async function handle(req: NextRequest, context: { params: Promise<{ path: strin
     };
     store.users.push(adminUser);
     addAudit(store, adminUser.id, "bootstrap_admin", "user", adminUser.id, { email: adminUser.email });
-    const token = createAccessToken(adminUser.id, adminUser.role);
+    const token = createAccessToken(adminUser.id, adminUser.role, adminUser.email, adminUser.full_name);
     return setSessionCookie(
       NextResponse.json({ access_token: token, token_type: "bearer", user: userOut(adminUser) }, { status: 201 }),
       req,
@@ -413,7 +439,7 @@ async function handle(req: NextRequest, context: { params: Promise<{ path: strin
         : "Account created. Outbound email is not configured on this server; you can verify your account inside Profile using your verification code.",
       link: "/profile",
     });
-    const token = createAccessToken(u.id, u.role);
+    const token = createAccessToken(u.id, u.role, u.email, u.full_name);
     return setSessionCookie(
       NextResponse.json(
         {
@@ -445,7 +471,7 @@ async function handle(req: NextRequest, context: { params: Promise<{ path: strin
     }
     loginOk(ip, email);
     addAudit(store, user.id, "login", "user", user.id);
-    const token = createAccessToken(user.id, user.role);
+    const token = createAccessToken(user.id, user.role, user.email, user.full_name);
     return setSessionCookie(
       NextResponse.json({ access_token: token, token_type: "bearer", user: userOut(user) }),
       req,
@@ -1948,6 +1974,15 @@ async function handle(req: NextRequest, context: { params: Promise<{ path: strin
   }
 
   return err(404, "Not found");
+}
+
+async function handle(req: NextRequest, context: { params: Promise<{ path: string[] }> }): Promise<NextResponse> {
+  const res = await handleInner(req, context);
+  const m = req.method.toUpperCase();
+  if (m !== "GET" && m !== "HEAD" && m !== "OPTIONS" && res.status < 400) {
+    saveStore(getStore());
+  }
+  return res;
 }
 
 export const GET = handle;

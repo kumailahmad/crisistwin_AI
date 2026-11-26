@@ -33,15 +33,31 @@ function b64u(input: string | Buffer): string {
   return Buffer.from(input).toString("base64url");
 }
 
-export function createAccessToken(userId: number, role: string): string {
+export function createAccessToken(
+  userId: number,
+  role: string,
+  email?: string,
+  full_name?: string | null
+): string {
   const header = b64u(JSON.stringify({ alg: "HS256", typ: "JWT" }));
   const now = Math.floor(Date.now() / 1000);
-  const payload = b64u(JSON.stringify({ sub: String(userId), role, iat: now, exp: now + TOKEN_MINUTES() * 60 }));
+  const payload = b64u(
+    JSON.stringify({
+      sub: String(userId),
+      role,
+      ...(email ? { email } : {}),
+      ...(full_name ? { name: full_name } : {}),
+      iat: now,
+      exp: now + TOKEN_MINUTES() * 60,
+    })
+  );
   const sig = crypto.createHmac("sha256", SECRET()).update(`${header}.${payload}`).digest("base64url");
   return `${header}.${payload}.${sig}`;
 }
 
-export function decodeAccessToken(token: string): { sub: number; role: string } | null {
+export function decodeAccessToken(
+  token: string
+): { sub: number; role: string; email?: string; full_name?: string | null } | null {
   try {
     const parts = token.split(".");
     if (parts.length !== 3) return null;
@@ -49,11 +65,22 @@ export function decodeAccessToken(token: string): { sub: number; role: string } 
     const expected = crypto.createHmac("sha256", SECRET()).update(`${header}.${payload}`).digest();
     const actual = Buffer.from(sig, "base64url");
     if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) return null;
-    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { sub?: string; role?: string; exp?: number };
+    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as {
+      sub?: string;
+      role?: string;
+      email?: string;
+      name?: string;
+      exp?: number;
+    };
     if (!data.sub || !data.exp || data.exp < Math.floor(Date.now() / 1000)) return null;
     const sub = Number(data.sub);
     if (!Number.isFinite(sub)) return null;
-    return { sub, role: data.role || "user" };
+    return {
+      sub,
+      role: data.role || "user",
+      email: typeof data.email === "string" ? data.email : undefined,
+      full_name: typeof data.name === "string" ? data.name : null,
+    };
   } catch {
     return null;
   }
@@ -80,7 +107,8 @@ export function sessionCookieConfig(req: NextRequest, clear = false) {
 
 /** Verify same-origin / non-simple request origin when authenticating mutating calls via cookies. */
 export function verifyMutationOrigin(req: NextRequest): boolean {
-  const host = (req.headers.get("x-forwarded-host") || req.headers.get("host") || "").toLowerCase();
+  const rawHost = req.headers.get("x-forwarded-host") || req.headers.get("host") || "";
+  const host = rawHost.split(",")[0].trim().toLowerCase();
   const origin = req.headers.get("origin");
   if (origin) {
     try {
