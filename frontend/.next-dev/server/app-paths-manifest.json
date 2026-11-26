@@ -1,19 +1,8 @@
 {
   "/api/v1/[...path]/route": "app/api/v1/[...path]/route.js",
   "/login/page": "app/login/page.js",
-  "/offline/page": "app/offline/page.js",
   "/page": "app/page.js",
-  "/staff-access/page": "app/staff-access/page.js",
+  "/offline/page": "app/offline/page.js",
   "/(app)/dashboard/page": "app/(app)/dashboard/page.js",
-  "/(app)/report/page": "app/(app)/report/page.js",
-  "/(app)/assistant/page": "app/(app)/assistant/page.js",
-  "/(app)/simulations/page": "app/(app)/simulations/page.js",
-  "/(app)/reports/page": "app/(app)/reports/page.js",
-  "/(app)/resources/page": "app/(app)/resources/page.js",
-  "/(app)/profile/page": "app/(app)/profile/page.js",
-  "/(app)/emergency/page": "app/(app)/emergency/page.js",
-  "/(app)/notifications/page": "app/(app)/notifications/page.js",
-  "/(app)/admin/alerts/page": "app/(app)/admin/alerts/page.js",
-  "/(app)/admin/resources/page": "app/(app)/admin/resources/page.js",
-  "/(app)/admin/page": "app/(app)/admin/page.js"
+  "/(app)/emergency/page": "app/(app)/emergency/page.js"
 }

@@ -163,7 +163,7 @@ export function PWAInstallButton({ compact = false }: { compact?: boolean }) {
       type="button"
       onClick={install}
       aria-label="Install app"
-      className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-cyan-400/40 bg-cyan-400/10 px-3 py-1.5 text-xs font-medium text-cyan-200 transition hover:bg-cyan-400/20"
+      className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-cyan-600/35 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-800 transition hover:bg-cyan-500/20 dark:border-cyan-400/40 dark:bg-cyan-400/10 dark:text-cyan-200 dark:hover:bg-cyan-400/20"
     >
       <Download className="h-3.5 w-3.5" />
       <span>{compact ? "Install" : "Install app"}</span>

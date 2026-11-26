@@ -1,7 +1,16 @@
 "use client";
 import Link from "next/link";
 import { Bell, CheckCheck } from "lucide-react";
-import { Button, Card, EmptyState, ErrorState, Notice, PageHeader, Skeleton, useToast } from "@/components/ui";
+import {
+  Button,
+  Card,
+  EmptyState,
+  ErrorState,
+  Notice,
+  PageHeader,
+  Skeleton,
+  useToast,
+} from "@/components/ui";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { fmtDate, useAsync } from "@/lib/hooks";
 import { notifications } from "@/lib/services";
@@ -38,7 +47,7 @@ export default function NotificationsPage() {
     <div className="mx-auto max-w-3xl">
       <PageHeader
         title="Notifications"
-        subtitle="Updates on your submitted crisis reports and published alerts matching your notification preferences."
+        subtitle="Updates on your submitted crisis reports and published alerts matching your preferences."
         actions={
           unread > 0 ? (
             <Button variant="outline" size="sm" onClick={markAll}>
@@ -50,7 +59,9 @@ export default function NotificationsPage() {
 
       {demo && (
         <div className="mb-4">
-          <Notice>Notifications require a signed-in account. Manage notification preferences under Profile.</Notice>
+          <Notice tone="amber">
+            Notifications require a signed-in account. Manage notification preferences under Profile.
+          </Notice>
         </div>
       )}
 
@@ -64,20 +75,27 @@ export default function NotificationsPage() {
             text="When an administrator publishes a district alert or updates one of your crisis reports, it will appear here."
           />
         ) : (
-          <ul className="divide-y divide-line/60">
+          <ul className="divide-y divide-ct-border/70">
             {items.map((n) => (
               <li key={n.id} className="flex flex-wrap items-start justify-between gap-3 p-4">
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 text-xs text-slate-400">
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-ct-muted">
                     <span className="capitalize">{n.kind}</span>
                     <span aria-hidden="true">·</span>
-                    <span>{fmtDate(n.created_at)}</span>
-                    {!n.read && <span className="font-semibold text-cyan-300">· Unread</span>}
+                    <span className="tabular-nums">{fmtDate(n.created_at)}</span>
+                    {!n.read && (
+                      <span className="font-semibold text-cyan-700 dark:text-[#21C7D9]">
+                        · Unread
+                      </span>
+                    )}
                   </div>
-                  <p className="mt-1 font-semibold text-white">{n.title}</p>
-                  <p className="mt-0.5 text-sm text-slate-300">{n.body}</p>
+                  <p className="mt-1 font-semibold text-ct-text">{n.title}</p>
+                  <p className="mt-0.5 text-sm text-ct-secondary">{n.body}</p>
                   {n.link && (
-                    <Link href={n.link} className="mt-2 inline-block text-xs text-cyan-300 hover:underline">
+                    <Link
+                      href={n.link}
+                      className="mt-2 inline-block text-xs font-semibold text-cyan-700 hover:underline dark:text-[#21C7D9]"
+                    >
                       Open related section
                     </Link>
                   )}

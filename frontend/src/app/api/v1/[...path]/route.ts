@@ -65,6 +65,8 @@ const INCIDENT_TYPES = new Set<string>([
   "heavy_rain",
   "earthquake",
   "landslide",
+  "building_collapse",
+  "road_accident",
   "drought",
   "fire",
   "road_blocked",
@@ -630,11 +632,14 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       const sp = req.nextUrl.searchParams;
       const did = sp.get("district_id") ? Number(sp.get("district_id")) : null;
       const includeAll = sp.get("all") === "1" && maybeUser?.role === "admin";
+      const includeExpired = sp.get("include_expired") === "1";
       const dMap = new Map(store.districts.map((d) => [d.id, d.name]));
       const now = Date.now();
       let rows = [...store.alerts];
       if (!includeAll) {
-        rows = rows.filter((a) => isAlertActive(a, now));
+        rows = includeExpired
+          ? rows.filter((a) => a.status === "published" || a.status === "expired")
+          : rows.filter((a) => isAlertActive(a, now));
       }
       if (did) {
         rows = rows.filter((a) => a.district_ids.length === 0 || a.district_ids.includes(did));
@@ -1544,6 +1549,8 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       message?: string;
       language?: AssistantLanguage;
       district_id?: number | null;
+      latitude?: number | null;
+      longitude?: number | null;
       simulation_id?: number | null;
       assessment_id?: number | null;
     }>(req);
@@ -1551,6 +1558,18 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
     const message = (body.message ?? "").trim();
     const language: AssistantLanguage = body.language === "ur" ? "ur" : body.language === "bal" ? "bal" : "en";
     if (!message || message.length > 2000) return err(422, "Message must be 1–2000 characters");
+
+    const lat = typeof body.latitude === "number" && Number.isFinite(body.latitude) ? body.latitude : null;
+    const lon = typeof body.longitude === "number" && Number.isFinite(body.longitude) ? body.longitude : null;
+    let resolvedDistrictId = body.district_id ?? null;
+    if (!resolvedDistrictId && lat !== null && lon !== null && inBalochistan(lat, lon)) {
+      for (const b of store.boundaries.values()) {
+        if (pointInGeometry(lat, lon, b.geometry)) {
+          resolvedDistrictId = b.district_id;
+          break;
+        }
+      }
+    }
 
     const contacts = getContacts();
     const activeAlerts = store.alerts.filter((a) => isAlertActive(a));
@@ -1576,8 +1595,24 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       verified_incidents_count: store.incidents.filter((i) => ["verified", "response_assigned", "resolved"].includes(i.status)).length,
     };
 
-    if (body.district_id) {
-      const d = store.districts.find((x) => x.id === body.district_id);
+    if (lat !== null && lon !== null) {
+      ctx.user_coordinates = { latitude: Math.round(lat * 1000) / 1000, longitude: Math.round(lon * 1000) / 1000 };
+      ctx.nearest_verified_resources = store.resources
+        .filter((r) => r.verified)
+        .map((r) => ({
+          name: r.name,
+          type: r.type,
+          availability_status: r.availability_status ?? "available",
+          phone: r.phone,
+          address: r.address,
+          distance_km: Math.round(kmBetween(lat, lon, r.latitude, r.longitude) * 10) / 10,
+        }))
+        .sort((a, b) => a.distance_km - b.distance_km)
+        .slice(0, 6);
+    }
+
+    if (resolvedDistrictId) {
+      const d = store.districts.find((x) => x.id === resolvedDistrictId);
       if (!d) return err(404, "District not found");
       ctx.district = { id: d.id, name: d.name, verified: d.verified, has_boundary: d.has_boundary };
       const last = store.assessments.find((a) => a.district_id === d.id);

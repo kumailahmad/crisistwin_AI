@@ -5,7 +5,7 @@ import { createAccessToken, decodeAccessToken, hashPassword, verifyPassword } fr
 import { inBalochistan, kmBetween, pointInGeometry, validatePolygon } from "../server/geo";
 import { buildCsv, compareSimulations, computeAnalytics, csvCell } from "../utils/analytics";
 import { createOfflineDraft, parseDrafts } from "../utils/offlineDrafts";
-import type { AlertItem, Incident, Resource, RiskAssessment, Simulation } from "../types";
+import { INCIDENT_TYPES, type AlertItem, type Incident, type Resource, type RiskAssessment, type Simulation } from "../types";
 
 test("riskEngine excludes missing values rather than treating them as zero", () => {
   const res = assess({ rainfall_mm_24h: 120, elevation_m: 150, flood_history_index: 0.7 }, { rainfall_mm_24h: "measured" });
@@ -114,4 +114,21 @@ test("password hashing and JWT signing enforce cryptographic integrity", () => {
   const decoded = decodeAccessToken(token);
   assert.deepEqual(decoded, { sub: 42, role: "admin", email: "admin@crisistwin.test", full_name: "Coordinator" });
   assert.equal(decodeAccessToken(token + "tampered"), null);
+});
+
+test("INCIDENT_TYPES includes all 9 citizen emergency reporting categories", () => {
+  const primaryIds = INCIDENT_TYPES.filter((t) => t.citizenPrimary).map((t) => t.value);
+  for (const required of [
+    "flood",
+    "fire",
+    "earthquake",
+    "landslide",
+    "building_collapse",
+    "road_accident",
+    "road_blocked",
+    "infrastructure_damage",
+    "other",
+  ] as const) {
+    assert.ok(primaryIds.includes(required), `Missing primary citizen type: ${required}`);
+  }
 });

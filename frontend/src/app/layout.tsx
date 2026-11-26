@@ -4,6 +4,7 @@ import "./globals.css";
 import { AuthProvider } from "@/lib/auth/AuthContext";
 import { ToastProvider } from "@/components/ui";
 import { PWAProvider } from "@/components/pwa/PWAProvider";
+import { ThemeProvider } from "@/lib/theme/ThemeContext";
 
 const displayFont = Plus_Jakarta_Sans({
   subsets: ["latin"],
@@ -27,7 +28,7 @@ const monoFont = JetBrains_Mono({
 });
 
 export const viewport: Viewport = {
-  themeColor: "#050b17",
+  themeColor: "#0B1424",
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
@@ -56,11 +57,13 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${displayFont.variable} ${bodyFont.variable} ${monoFont.variable}`}>
       <body>
-        <PWAProvider>
-          <AuthProvider>
-            <ToastProvider>{children}</ToastProvider>
-          </AuthProvider>
-        </PWAProvider>
+        <ThemeProvider>
+          <PWAProvider>
+            <AuthProvider>
+              <ToastProvider>{children}</ToastProvider>
+            </AuthProvider>
+          </PWAProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

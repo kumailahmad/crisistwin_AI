@@ -93,11 +93,12 @@ export const users = {
 };
 
 export const alerts = {
-  list: async (p: { district_id?: number; all?: boolean } = {}): Promise<AlertItem[]> => {
+  list: async (p: { district_id?: number; all?: boolean; include_expired?: boolean } = {}): Promise<AlertItem[]> => {
     if (isDemo()) return [];
     const qs = new URLSearchParams();
     if (p.district_id) qs.set("district_id", String(p.district_id));
     if (p.all) qs.set("all", "1");
+    if (p.include_expired) qs.set("include_expired", "1");
     const q = qs.toString();
     return api<AlertItem[]>(`/alerts${q ? `?${q}` : ""}`);
   },
@@ -259,6 +260,8 @@ export const assistant = {
     message: string;
     language: AssistantLanguage;
     district_id?: number | null;
+    latitude?: number | null;
+    longitude?: number | null;
     simulation_id?: number | null;
     assessment_id?: number | null;
   }) => api<ChatReply>("/assistant/chat", { method: "POST", json: b }),

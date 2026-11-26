@@ -26,10 +26,10 @@ const steps = [
 
 export default function Landing() {
   return (
-    <div className="relative overflow-hidden">
+    <div className="dark ct-command-surface relative min-h-screen overflow-hidden bg-[#0B1424] text-[#EDF5FA]">
       <header className="sticky top-0 z-50 border-b border-line/60 bg-ink-950/90 backdrop-blur">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-8 px-5 py-3">
-          <Logo />
+          <Logo inverse />
           <nav className="hidden items-center gap-6 text-sm font-medium text-slate-300 md:flex" aria-label="Sections">
             <a href="#report" className="whitespace-nowrap shrink-0 hover:text-cyan-300">Report</a>
             <a href="#how" className="whitespace-nowrap shrink-0 hover:text-cyan-300">Workflow</a>
@@ -253,7 +253,7 @@ export default function Landing() {
 
       <footer className="border-t border-line bg-ink-950">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 px-5 py-8 text-sm text-slate-400 md:flex-row">
-          <Logo />
+          <Logo inverse />
           <p>
             {CONTACT ? (
               <>

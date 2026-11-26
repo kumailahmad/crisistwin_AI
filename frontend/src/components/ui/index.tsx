@@ -6,24 +6,40 @@ import { RISK_COLORS } from "@/lib/types";
 
 /* ---------- Button ---------- */
 type BtnProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "primary" | "ghost" | "outline" | "danger";
-  size?: "sm" | "md";
+  variant?: "primary" | "emergency" | "navy" | "ghost" | "outline" | "danger";
+  size?: "sm" | "md" | "lg";
   loading?: boolean;
 };
-export function Button({ variant = "primary", size = "md", loading, className, children, disabled, ...p }: BtnProps) {
+
+export function Button({
+  variant = "primary",
+  size = "md",
+  loading,
+  className,
+  children,
+  disabled,
+  ...p
+}: BtnProps) {
   const v = {
-    primary: "bg-cyan-400 text-ink-950 hover:bg-cyan-300 shadow-glow font-semibold",
-    ghost: "text-slate-300 hover:bg-ink-800 hover:text-white",
-    outline: "border border-line text-slate-200 hover:border-cyan-400/60 hover:bg-ink-800",
-    danger: "bg-red-500/15 text-red-300 border border-red-500/40 hover:bg-red-500/25",
+    primary: "bg-[#21C7D9] text-[#0B1424] hover:bg-[#3ad3e3] shadow-glow font-semibold",
+    emergency: "bg-[#DC454D] text-white hover:bg-[#c53a42] shadow-sm font-bold",
+    navy: "bg-[#0B1424] text-[#EDF5FA] hover:bg-[#11243A] dark:bg-[#21C7D9] dark:text-[#0B1424] font-semibold",
+    ghost: "text-ct-secondary hover:bg-ct-soft hover:text-ct-text",
+    outline: "border border-ct-border bg-ct-surface text-ct-text hover:border-[#21C7D9] hover:bg-ct-soft",
+    danger: "bg-[#DC454D]/12 text-[#DC454D] dark:text-red-300 border border-[#DC454D]/40 hover:bg-[#DC454D]/20 font-medium",
   }[variant];
+  const s = {
+    sm: "min-h-[38px] px-3 py-1.5 text-xs",
+    md: "min-h-[44px] px-4 py-2 text-sm",
+    lg: "min-h-[52px] px-6 py-3 text-base",
+  }[size];
   return (
     <button
       {...p}
       disabled={disabled || loading}
       className={cn(
-        "inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg transition duration-150 disabled:cursor-not-allowed disabled:opacity-50",
-        size === "sm" ? "min-h-[36px] px-3 py-1.5 text-xs" : "min-h-[42px] px-4 py-2 text-sm",
+        "inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl transition duration-150 disabled:cursor-not-allowed disabled:opacity-50",
+        s,
         v,
         className
       )}
@@ -36,7 +52,13 @@ export function Button({ variant = "primary", size = "md", loading, className, c
 
 /* ---------- Card ---------- */
 export const Card = ({ className, children, ...p }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div {...p} className={cn("rounded-2xl border border-line bg-ink-850/85 shadow-card backdrop-blur-sm", className)}>
+  <div
+    {...p}
+    className={cn(
+      "rounded-2xl border border-ct-border bg-ct-surface shadow-card transition-colors",
+      className
+    )}
+  >
     {children}
   </div>
 );
@@ -50,10 +72,10 @@ export const CardHeader = ({
   subtitle?: React.ReactNode;
   action?: React.ReactNode;
 }) => (
-  <div className="flex items-start justify-between gap-3 border-b border-line/70 px-5 py-4">
+  <div className="flex items-start justify-between gap-3 border-b border-ct-border/80 px-5 py-4">
     <div>
-      <h3 className="text-sm font-semibold tracking-wide text-white">{title}</h3>
-      {subtitle && <p className="mt-0.5 text-xs text-slate-400">{subtitle}</p>}
+      <h3 className="text-sm font-semibold tracking-wide text-ct-text">{title}</h3>
+      {subtitle && <p className="mt-0.5 text-xs text-ct-muted">{subtitle}</p>}
     </div>
     {action}
   </div>
@@ -61,13 +83,15 @@ export const CardHeader = ({
 
 /* ---------- Status & Metadata Labels ---------- */
 const tones = {
-  neutral: "border-line bg-ink-800/80 text-slate-300",
-  cyan: "border-cyan-400/35 bg-cyan-400/10 text-cyan-200",
-  green: "border-emerald-400/35 bg-emerald-400/10 text-emerald-300",
-  amber: "border-amber-400/35 bg-amber-400/10 text-amber-200",
-  red: "border-red-400/35 bg-red-400/10 text-red-300",
-  orange: "border-orange-400/35 bg-orange-400/10 text-orange-300",
+  neutral: "border-ct-border bg-ct-soft text-ct-secondary",
+  cyan: "border-cyan-500/35 bg-cyan-500/10 text-cyan-800 dark:text-cyan-200",
+  blue: "border-sky-500/35 bg-sky-500/10 text-sky-800 dark:text-sky-200",
+  green: "border-emerald-600/30 bg-emerald-500/12 text-emerald-800 dark:text-emerald-300",
+  amber: "border-amber-500/40 bg-amber-500/12 text-amber-900 dark:text-amber-200",
+  red: "border-[#DC454D]/40 bg-[#DC454D]/12 text-[#b91c25] dark:text-red-200",
+  orange: "border-orange-500/40 bg-orange-500/12 text-orange-800 dark:text-orange-200",
 };
+
 export const Badge = ({
   tone = "neutral",
   className,
@@ -77,7 +101,13 @@ export const Badge = ({
   className?: string;
   children: React.ReactNode;
 }) => (
-  <span className={cn("inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-2 py-0.5 text-[11px] font-medium", tones[tone], className)}>
+  <span
+    className={cn(
+      "inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md border px-2 py-0.5 text-[11px] font-semibold",
+      tones[tone],
+      className
+    )}
+  >
     {children}
   </span>
 );
@@ -106,24 +136,37 @@ export const VerifiedBadge = ({ ok }: { ok: boolean }) =>
 
 /* ---------- Form ---------- */
 const field =
-  "w-full rounded-lg border border-line bg-ink-900 px-3 py-2.5 text-sm text-white placeholder:text-slate-500 focus:border-cyan-400/70 focus:outline-none focus:ring-2 focus:ring-cyan-400/20 disabled:opacity-60";
-export const Input = ({ className, ...p }: React.InputHTMLAttributes<HTMLInputElement>) => <input {...p} className={cn(field, className)} />;
+  "w-full rounded-xl border border-ct-border bg-ct-surface px-3.5 py-2.5 text-sm text-ct-text placeholder:text-ct-muted focus:border-[#21C7D9] focus:outline-none focus:ring-2 focus:ring-[#21C7D9]/25 disabled:opacity-60";
+
+export const Input = ({ className, ...p }: React.InputHTMLAttributes<HTMLInputElement>) => (
+  <input {...p} className={cn(field, className)} />
+);
 export const Select = ({ className, children, ...p }: React.SelectHTMLAttributes<HTMLSelectElement>) => (
   <select {...p} className={cn(field, "pr-8", className)}>
     {children}
   </select>
 );
 export const Textarea = ({ className, ...p }: React.TextareaHTMLAttributes<HTMLTextAreaElement>) => (
-  <textarea {...p} className={cn(field, "min-h-[90px]", className)} />
+  <textarea {...p} className={cn(field, "min-h-[96px]", className)} />
 );
-export function Field({ label, hint, error, children }: { label: string; hint?: string; error?: string; children: React.ReactNode }) {
+export function Field({
+  label,
+  hint,
+  error,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  error?: string;
+  children: React.ReactNode;
+}) {
   return (
     <label className="block space-y-1.5">
-      <span className="text-xs font-medium text-slate-300">{label}</span>
+      <span className="text-xs font-semibold text-ct-secondary">{label}</span>
       {children}
-      {hint && !error && <span className="block text-[11px] text-slate-500">{hint}</span>}
+      {hint && !error && <span className="block text-[11px] text-ct-muted">{hint}</span>}
       {error && (
-        <span className="block text-[11px] text-red-300" role="alert">
+        <span className="block text-[11px] font-medium text-[#DC454D] dark:text-red-300" role="alert">
           {error}
         </span>
       )}
@@ -132,8 +175,12 @@ export function Field({ label, hint, error, children }: { label: string; hint?: 
 }
 
 /* ---------- States ---------- */
-export const Skeleton = ({ className }: { className?: string }) => <div className={cn("skeleton", className)} aria-hidden />;
-export const Spinner = ({ className }: { className?: string }) => <Loader2 className={cn("h-4 w-4 animate-spin text-cyan-300", className)} />;
+export const Skeleton = ({ className }: { className?: string }) => (
+  <div className={cn("skeleton", className)} aria-hidden />
+);
+export const Spinner = ({ className }: { className?: string }) => (
+  <Loader2 className={cn("h-4 w-4 animate-spin text-[#21C7D9]", className)} />
+);
 export const EmptyState = ({
   title,
   text,
@@ -146,16 +193,20 @@ export const EmptyState = ({
   icon?: React.ReactNode;
 }) => (
   <div className="flex flex-col items-center justify-center gap-2 px-6 py-10 text-center">
-    <div className="grid h-11 w-11 place-items-center rounded-xl border border-line bg-ink-800 text-cyan-300">
+    <div className="grid h-11 w-11 place-items-center rounded-xl border border-ct-border bg-ct-soft text-cyan-700 dark:text-[#21C7D9]">
       {icon ?? <Inbox className="h-5 w-5" />}
     </div>
-    <p className="text-sm font-semibold text-white">{title}</p>
-    {text && <p className="max-w-sm text-xs text-slate-400">{text}</p>}
+    <p className="text-sm font-semibold text-ct-text">{title}</p>
+    {text && <p className="max-w-sm text-xs text-ct-muted">{text}</p>}
     {action}
   </div>
 );
+
 export const ErrorState = ({ message, onRetry }: { message: string; onRetry?: () => void }) => (
-  <div role="alert" className="flex items-start gap-3 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
+  <div
+    role="alert"
+    className="flex items-start gap-3 rounded-xl border border-[#DC454D]/35 bg-[#DC454D]/10 p-4 text-sm text-[#991b1b] dark:text-red-200"
+  >
     <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
     <div className="flex-1">{message}</div>
     {onRetry && (
@@ -165,12 +216,21 @@ export const ErrorState = ({ message, onRetry }: { message: string; onRetry?: ()
     )}
   </div>
 );
-export const Notice = ({ tone = "amber", children }: { tone?: "amber" | "cyan"; children: React.ReactNode }) => (
+
+export const Notice = ({
+  tone = "amber",
+  children,
+}: {
+  tone?: "amber" | "cyan";
+  children: React.ReactNode;
+}) => (
   <div
     role="status"
     className={cn(
       "rounded-xl border px-4 py-3 text-xs leading-relaxed",
-      tone === "amber" ? "border-amber-400/30 bg-amber-400/10 text-amber-100" : "border-cyan-400/30 bg-cyan-400/10 text-cyan-100"
+      tone === "amber"
+        ? "border-[#E9A23B]/45 bg-[#E9A23B]/12 text-amber-950 dark:text-amber-100"
+        : "border-[#21C7D9]/40 bg-[#21C7D9]/10 text-slate-800 dark:text-cyan-100"
     )}
   >
     {children}
@@ -178,21 +238,30 @@ export const Notice = ({ tone = "amber", children }: { tone?: "amber" | "cyan"; 
 );
 
 /* ---------- Layout bits ---------- */
-export const PageHeader = ({ title, subtitle, actions }: { title: string; subtitle?: string; actions?: React.ReactNode }) => (
+export const PageHeader = ({
+  title,
+  subtitle,
+  actions,
+}: {
+  title: string;
+  subtitle?: string;
+  actions?: React.ReactNode;
+}) => (
   <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
     <div>
-      <h1 className="text-2xl font-bold tracking-tight text-white">{title}</h1>
-      {subtitle && <p className="mt-1 max-w-2xl text-sm text-slate-400">{subtitle}</p>}
+      <h1 className="text-2xl font-bold tracking-normal text-ct-text">{title}</h1>
+      {subtitle && <p className="mt-1 max-w-2xl text-sm text-ct-secondary">{subtitle}</p>}
     </div>
     {actions}
   </div>
 );
+
 export function StatCard({
   label,
   value,
   hint,
   icon,
-  accent = "#22d3ee",
+  accent = "#21C7D9",
 }: {
   label: string;
   value: React.ReactNode;
@@ -203,11 +272,11 @@ export function StatCard({
   return (
     <Card className="relative overflow-hidden p-5">
       <div className="flex items-center justify-between">
-        <p className="text-xs font-medium text-slate-400">{label}</p>
+        <p className="text-xs font-medium text-ct-muted">{label}</p>
         <div style={{ color: accent }}>{icon}</div>
       </div>
-      <p className="mt-3 font-mono text-3xl font-bold text-white tabular-nums">{value}</p>
-      {hint && <p className="mt-1 text-xs text-slate-500">{hint}</p>}
+      <p className="mt-3 font-mono text-3xl font-bold text-ct-text tabular-nums">{value}</p>
+      {hint && <p className="mt-1 text-xs text-ct-muted">{hint}</p>}
     </Card>
   );
 }
@@ -236,7 +305,7 @@ export function Modal({
   if (!open) return null;
   return (
     <div
-      className="fixed inset-0 z-[3000] grid place-items-center bg-black/70 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-[3000] grid place-items-center bg-[#0B1424]/70 p-4 backdrop-blur-sm"
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
       <div
@@ -244,15 +313,19 @@ export function Modal({
         aria-modal="true"
         aria-labelledby={id}
         className={cn(
-          "max-h-[90vh] w-full overflow-auto rounded-2xl border border-line bg-ink-850 shadow-card animate-fadeUp",
+          "max-h-[90vh] w-full overflow-auto rounded-2xl border border-ct-border bg-ct-surface shadow-card animate-fadeUp",
           wide ? "max-w-2xl" : "max-w-md"
         )}
       >
-        <div className="flex items-center justify-between border-b border-line px-5 py-4">
-          <h2 id={id} className="text-base font-semibold text-white">
+        <div className="flex items-center justify-between border-b border-ct-border px-5 py-4">
+          <h2 id={id} className="text-base font-semibold text-ct-text">
             {title}
           </h2>
-          <button onClick={onClose} aria-label="Close" className="rounded p-1.5 text-slate-400 hover:bg-ink-800 hover:text-white">
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="grid min-h-[36px] min-w-[36px] place-items-center rounded-lg text-ct-muted hover:bg-ct-soft hover:text-ct-text"
+          >
             <X className="h-4 w-4" />
           </button>
         </div>
@@ -261,6 +334,7 @@ export function Modal({
     </div>
   );
 }
+
 export function ConfirmDialog({
   open,
   title,
@@ -279,7 +353,7 @@ export function ConfirmDialog({
   const [busy, setBusy] = useState(false);
   return (
     <Modal open={open} onClose={onClose} title={title}>
-      <p className="text-sm text-slate-300">{message}</p>
+      <p className="text-sm text-ct-secondary">{message}</p>
       <div className="mt-5 flex justify-end gap-2">
         <Button variant="ghost" onClick={onClose}>
           Cancel
@@ -318,16 +392,25 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <ToastCtx.Provider value={push}>
       {children}
-      <div className="pointer-events-none fixed bottom-20 right-4 z-[4000] flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2 lg:bottom-4" aria-live="polite">
+      <div
+        className="pointer-events-none fixed bottom-20 right-4 z-[4000] flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2 lg:bottom-4"
+        aria-live="polite"
+      >
         {items.map((t) => (
           <div
             key={t.id}
             className={cn(
               "pointer-events-auto flex items-start gap-2 rounded-xl border px-4 py-3 text-sm shadow-card animate-fadeUp",
-              t.kind === "ok" ? "border-emerald-400/40 bg-emerald-950 text-emerald-100" : "border-red-400/40 bg-red-950 text-red-100"
+              t.kind === "ok"
+                ? "border-emerald-500/40 bg-emerald-950 text-emerald-100"
+                : "border-[#DC454D]/45 bg-[#3d1216] text-red-100"
             )}
           >
-            {t.kind === "ok" ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" /> : <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}
+            {t.kind === "ok" ? (
+              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+            ) : (
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            )}
             {t.text}
           </div>
         ))}

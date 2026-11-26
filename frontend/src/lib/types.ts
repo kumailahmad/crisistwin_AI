@@ -272,14 +272,16 @@ export const FACTOR_LABELS: Record<string, string> = {
 
 export type IncidentType =
   | "flood"
-  | "flash_flood"
-  | "heavy_rain"
+  | "fire"
   | "earthquake"
   | "landslide"
-  | "drought"
-  | "fire"
+  | "building_collapse"
+  | "road_accident"
   | "road_blocked"
   | "infrastructure_damage"
+  | "flash_flood"
+  | "heavy_rain"
+  | "drought"
   | "medical"
   | "missing_person"
   | "other";
@@ -334,19 +336,21 @@ export interface Incident {
   similar_nearby?: number;
 }
 
-export const INCIDENT_TYPES: { value: IncidentType; label: string; emoji: string }[] = [
-  { value: "flood", label: "Flooding", emoji: "🌊" },
+export const INCIDENT_TYPES: { value: IncidentType; label: string; emoji: string; citizenPrimary?: boolean }[] = [
+  { value: "flood", label: "Flood", emoji: "🌊", citizenPrimary: true },
+  { value: "fire", label: "Fire", emoji: "🔥", citizenPrimary: true },
+  { value: "earthquake", label: "Earthquake", emoji: "🏚️", citizenPrimary: true },
+  { value: "landslide", label: "Landslide", emoji: "⛰️", citizenPrimary: true },
+  { value: "building_collapse", label: "Building Collapse", emoji: "🧱", citizenPrimary: true },
+  { value: "road_accident", label: "Road Accident", emoji: "🚑", citizenPrimary: true },
+  { value: "road_blocked", label: "Road Blockage", emoji: "🚧", citizenPrimary: true },
+  { value: "infrastructure_damage", label: "Infrastructure Damage", emoji: "🏗️", citizenPrimary: true },
+  { value: "other", label: "Other", emoji: "⚠️", citizenPrimary: true },
   { value: "flash_flood", label: "Flash flood", emoji: "💦" },
   { value: "heavy_rain", label: "Heavy rain / storm", emoji: "⛈️" },
-  { value: "earthquake", label: "Earthquake damage", emoji: "🏚️" },
-  { value: "landslide", label: "Landslide / rockfall", emoji: "⛰️" },
-  { value: "road_blocked", label: "Road blocked / bridge", emoji: "🚧" },
-  { value: "infrastructure_damage", label: "Infrastructure damage", emoji: "🏗️" },
-  { value: "fire", label: "Fire", emoji: "🔥" },
   { value: "drought", label: "Drought / water shortage", emoji: "🏜️" },
-  { value: "medical", label: "Medical emergency", emoji: "🚑" },
+  { value: "medical", label: "Medical emergency", emoji: "🏥" },
   { value: "missing_person", label: "Missing person", emoji: "🔎" },
-  { value: "other", label: "Other", emoji: "⚠️" },
 ];
 
 export const SEVERITY: Record<IncidentSeverity, { label: string; color: string }> = {

@@ -1,17 +1,42 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { CheckCircle2, KeyRound, ShieldCheck, Trash2 } from "lucide-react";
-import { Button, Card, CardHeader, ConfirmDialog, Field, Input, Notice, PageHeader, Select, useToast } from "@/components/ui";
+import {
+  CheckCircle2,
+  KeyRound,
+  LocateFixed,
+  MapPin,
+  Moon,
+  ShieldCheck,
+  Sun,
+  Trash2,
+} from "lucide-react";
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  ConfirmDialog,
+  Field,
+  Input,
+  Notice,
+  PageHeader,
+  Select,
+  useToast,
+} from "@/components/ui";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { useAsync } from "@/lib/hooks";
+import { useCitizenLocation } from "@/lib/hooks/useCitizenLocation";
 import { auth, districts, users } from "@/lib/services";
+import { useTheme } from "@/lib/theme/ThemeContext";
 
 export default function ProfilePage() {
   const { user, demo, refreshUser, logout } = useAuth();
+  const { theme, setTheme } = useTheme();
   const router = useRouter();
   const toast = useToast();
   const ds = useAsync(() => districts.list(), [], "districts");
+  const loc = useCitizenLocation(ds.data ?? []);
 
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
@@ -42,10 +67,11 @@ export default function ProfilePage() {
     e.preventDefault();
     setBusy(true);
     try {
+      const nextDist = districtId ? Number(districtId) : null;
       await users.updateMe({
         full_name: fullName.trim() || null,
         phone: phone.trim() || null,
-        district_id: districtId ? Number(districtId) : null,
+        district_id: nextDist,
         notification_prefs: {
           district_alerts: districtAlerts,
           incident_updates: incidentUpdates,
@@ -55,6 +81,7 @@ export default function ProfilePage() {
           share_approximate_only: approxOnly,
         },
       });
+      loc.setSelectedDistrictId(nextDist);
       await refreshUser();
       toast("ok", "Profile & preferences saved");
     } catch (err) {
@@ -94,15 +121,19 @@ export default function ProfilePage() {
     }
   }
 
+  const activeDistrict = (ds.data ?? []).find(
+    (d) => d.id === (loc.selectedDistrictId ?? (districtId ? Number(districtId) : null))
+  );
+
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <PageHeader
-        title="Profile, notifications & privacy"
-        subtitle="Manage your district subscription, alert preferences, location privacy, and account security."
+        title="Profile & Settings"
+        subtitle="Manage your district alerts, location sharing, display theme, and account security."
       />
 
       {demo && (
-        <Notice>
+        <Notice tone="amber">
           You are using a temporary demo session. Sign in with a registered account to persist profile settings.
         </Notice>
       )}
@@ -111,8 +142,10 @@ export default function ProfilePage() {
         <Card className="p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="text-sm font-semibold text-white">Verify your email</h2>
-              <p className="mt-0.5 text-xs text-slate-400">Enter the verification code shown when you registered.</p>
+              <h2 className="text-sm font-semibold text-ct-text">Verify your email</h2>
+              <p className="mt-0.5 text-xs text-ct-muted">
+                Enter the verification code shown when you registered.
+              </p>
             </div>
             <div className="flex gap-2">
               <Input
@@ -129,11 +162,84 @@ export default function ProfilePage() {
         </Card>
       )}
 
+      {/* Location & Appearance Card */}
+      <Card id="location">
+        <CardHeader
+          title="Location & Display Preferences"
+          subtitle="Manage your location permission status, active Balochistan district, and Light/Dark appearance."
+        />
+        <div className="grid gap-5 p-5 sm:grid-cols-2">
+          <div className="space-y-3 rounded-xl border border-ct-border bg-ct-soft/50 p-4">
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-ct-muted">
+                <MapPin className="h-3.5 w-3.5 text-cyan-700 dark:text-[#21C7D9]" />
+                Location Status
+              </span>
+              <Badge tone={loc.permission === "granted" ? "green" : loc.permission === "denied" ? "red" : "neutral"}>
+                {loc.permission === "granted"
+                  ? "Granted"
+                  : loc.permission === "denied"
+                    ? "Denied"
+                    : loc.permission === "unsupported"
+                      ? "Unavailable"
+                      : "Not requested"}
+              </Badge>
+            </div>
+            <p className="text-sm font-semibold text-ct-text">
+              District: {activeDistrict ? activeDistrict.name : "Not selected"}
+            </p>
+            <p className="font-mono text-xs text-ct-muted tabular-nums">
+              {loc.lat != null && loc.lon != null
+                ? `${loc.lat.toFixed(4)}, ${loc.lon.toFixed(4)}${loc.accuracy != null ? ` · ±${Math.round(loc.accuracy)} m` : ""}`
+                : "No live GPS coordinates cached in this session"}
+            </p>
+            {loc.error && <p className="text-xs text-[#DC454D] dark:text-red-300">{loc.error}</p>}
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => loc.requestGps()}
+              loading={loc.locating}
+            >
+              <LocateFixed className="h-3.5 w-3.5" />
+              {loc.lat != null ? "Refresh GPS" : "Allow GPS location"}
+            </Button>
+          </div>
+
+          <div className="space-y-3 rounded-xl border border-ct-border bg-ct-soft/50 p-4">
+            <p className="text-xs font-semibold uppercase tracking-wider text-ct-muted">
+              Citizen Interface Theme
+            </p>
+            <p className="text-xs text-ct-secondary">
+              Light mode gives high daytime readability; switch to Dark navy at night.
+            </p>
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <Button
+                type="button"
+                size="sm"
+                variant={theme === "light" ? "primary" : "outline"}
+                onClick={() => setTheme("light")}
+              >
+                <Sun className="h-4 w-4" /> Light
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={theme === "dark" ? "primary" : "outline"}
+                onClick={() => setTheme("dark")}
+              >
+                <Moon className="h-4 w-4" /> Dark
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Card>
+
       <Card>
         <CardHeader
           title="Account details & alert preferences"
           subtitle={user ? `${user.email} · ${user.email_verified ? "Verified email" : "Email unverified"}` : undefined}
-          action={user?.email_verified ? <CheckCircle2 className="h-4 w-4 text-emerald-400" /> : undefined}
+          action={user?.email_verified ? <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" /> : undefined}
         />
         <form onSubmit={saveProfile} className="space-y-4 p-5">
           <div className="grid gap-4 sm:grid-cols-2">
@@ -145,7 +251,14 @@ export default function ProfilePage() {
             </Field>
           </div>
           <Field label="Subscribed district for alerts" hint="Receive alerts specifically affecting your home district plus province-wide notices.">
-            <Select value={districtId} onChange={(e) => setDistrictId(e.target.value)} disabled={demo}>
+            <Select
+              value={districtId}
+              onChange={(e) => {
+                setDistrictId(e.target.value);
+                loc.setSelectedDistrictId(e.target.value ? Number(e.target.value) : null);
+              }}
+              disabled={demo}
+            >
               <option value="">All Balochistan districts</option>
               {(ds.data ?? []).map((d) => (
                 <option key={d.id} value={d.id}>
@@ -155,29 +268,57 @@ export default function ProfilePage() {
             </Select>
           </Field>
 
-          <div className="space-y-2 border-t border-line pt-4">
-            <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Notification Preferences</p>
-            <label className="flex items-center gap-2 text-sm text-slate-200">
-              <input type="checkbox" className="accent-cyan-400" checked={districtAlerts} onChange={(e) => setDistrictAlerts(e.target.checked)} disabled={demo} />
+          <div className="space-y-2 border-t border-ct-border pt-4">
+            <p className="text-xs font-semibold uppercase tracking-wider text-ct-muted">
+              Notification Preferences
+            </p>
+            <label className="flex min-h-[36px] items-center gap-2.5 text-sm text-ct-text">
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-[#21C7D9]"
+                checked={districtAlerts}
+                onChange={(e) => setDistrictAlerts(e.target.checked)}
+                disabled={demo}
+              />
               Published emergency alerts for my district
             </label>
-            <label className="flex items-center gap-2 text-sm text-slate-200">
-              <input type="checkbox" className="accent-cyan-400" checked={incidentUpdates} onChange={(e) => setIncidentUpdates(e.target.checked)} disabled={demo} />
+            <label className="flex min-h-[36px] items-center gap-2.5 text-sm text-ct-text">
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-[#21C7D9]"
+                checked={incidentUpdates}
+                onChange={(e) => setIncidentUpdates(e.target.checked)}
+                disabled={demo}
+              />
               Status updates on my submitted crisis reports
             </label>
-            <label className="flex items-center gap-2 text-sm text-slate-200">
-              <input type="checkbox" className="accent-cyan-400" checked={publicSafety} onChange={(e) => setPublicSafety(e.target.checked)} disabled={demo} />
+            <label className="flex min-h-[36px] items-center gap-2.5 text-sm text-ct-text">
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-[#21C7D9]"
+                checked={publicSafety}
+                onChange={(e) => setPublicSafety(e.target.checked)}
+                disabled={demo}
+              />
               General public safety preparedness notices
             </label>
           </div>
 
-          <div className="space-y-2 border-t border-line pt-4">
-            <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-slate-400">
-              <ShieldCheck className="h-3.5 w-3.5 text-cyan-300" /> Privacy
+          <div className="space-y-2 border-t border-ct-border pt-4">
+            <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-ct-muted">
+              <ShieldCheck className="h-3.5 w-3.5 text-cyan-700 dark:text-[#21C7D9]" /> Privacy
             </p>
-            <label className="flex items-center gap-2 text-sm text-slate-200">
-              <input type="checkbox" className="accent-cyan-400" checked={approxOnly} onChange={(e) => setApproxOnly(e.target.checked)} disabled={demo} />
-              Round coordinates (~110 m) when verified incidents appear on public maps (administrators still see exact coordinates for dispatch).
+            <label className="flex min-h-[36px] items-start gap-2.5 text-sm text-ct-text">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4 accent-[#21C7D9]"
+                checked={approxOnly}
+                onChange={(e) => setApproxOnly(e.target.checked)}
+                disabled={demo}
+              />
+              <span>
+                Round coordinates (~110 m) when verified incidents appear on public maps (administrators still see exact coordinates for dispatch).
+              </span>
             </label>
           </div>
 
@@ -209,11 +350,13 @@ export default function ProfilePage() {
       )}
 
       {!demo && (
-        <Card className="border-red-500/30 p-5">
+        <Card className="border-[#DC454D]/35 p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <h2 className="text-sm font-semibold text-red-200">Delete account</h2>
-              <p className="mt-0.5 text-xs text-slate-400">Deactivates your login and scrubs personal profile fields.</p>
+              <h2 className="text-sm font-semibold text-[#b91c25] dark:text-red-200">Delete account</h2>
+              <p className="mt-0.5 text-xs text-ct-muted">
+                Deactivates your login and scrubs personal profile fields.
+              </p>
             </div>
             <Button variant="danger" size="sm" onClick={() => setConfirmDel(true)}>
               <Trash2 className="h-3.5 w-3.5" /> Delete account

@@ -73,7 +73,7 @@ export default function StaffAccess() {
   }
 
   return (
-    <div className="relative grid min-h-screen place-items-center overflow-hidden px-4 py-10">
+    <div className="dark ct-command-surface relative grid min-h-screen place-items-center overflow-hidden bg-[#0B1424] px-4 py-10 text-[#EDF5FA]">
       <DuskSky />
       <Mountains className="pointer-events-none absolute inset-x-0 bottom-0 h-[55%] w-full" />
       <Card className="relative w-full max-w-sm p-7 animate-fadeUp">
