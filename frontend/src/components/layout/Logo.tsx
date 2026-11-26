@@ -45,8 +45,8 @@ export function Logo({
         </span>
         <span
           className={cn(
-            "mt-0.5 text-[10px] font-semibold uppercase tracking-[.16em]",
-            compact ? "hidden sm:block" : "block",
+            "mt-0.5 block font-semibold uppercase tracking-[.14em]",
+            compact ? "text-[9px] sm:text-[10px]" : "text-[10px]",
             inverse ? "text-slate-300" : "text-ct-muted"
           )}
         >

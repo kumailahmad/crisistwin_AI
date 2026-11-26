@@ -8,6 +8,7 @@ import {
   createAccessToken,
   decodeAccessToken,
   flagRateOk,
+  generateGuestVerificationCode,
   generateOpaqueToken,
   hashOpaqueToken,
   hashPassword,
@@ -16,7 +17,9 @@ import {
   loginFailed,
   loginOk,
   sessionCookieConfig,
+  trackRateOk,
   verifyMutationOrigin,
+  verifyOpaqueSecret,
   verifyPassword,
 } from "@/lib/server/auth";
 import { inBalochistan, kmBetween, pointInGeometry, validatePolygon } from "@/lib/server/geo";
@@ -167,6 +170,10 @@ function getUser(req: NextRequest, store: Store): StoredUser | NextResponse {
   return user;
 }
 
+function clientIp(req: NextRequest): string {
+  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
+}
+
 function getOptionalUser(req: NextRequest, store: Store): StoredUser | null {
   const auth = req.headers.get("authorization") ?? "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : req.cookies.get(SESSION_COOKIE)?.value ?? "";
@@ -175,6 +182,11 @@ function getOptionalUser(req: NextRequest, store: Store): StoredUser | null {
   if (!claims) return null;
   const user = store.users.find((u) => u.id === claims.sub || (claims.email ? u.email === claims.email : false));
   return user && user.is_active ? user : null;
+}
+
+function hasSessionCookie(req: NextRequest): boolean {
+  const auth = req.headers.get("authorization") ?? "";
+  return !auth.startsWith("Bearer ") && Boolean(req.cookies.get(SESSION_COOKIE)?.value);
 }
 
 function requireAdmin(req: NextRequest, store: Store): StoredUser | NextResponse {
@@ -196,9 +208,14 @@ function roundApprox(n: number): number {
   return Math.round(n * 1000) / 1000;
 }
 
-function incidentOut(store: Store, i: StoredIncident, opts: { publicView?: boolean; similar?: number } = {}) {
+function incidentOut(
+  store: Store,
+  i: StoredIncident,
+  opts: { publicView?: boolean; similar?: number; guestCode?: string } = {}
+) {
   const district = i.district_id ? store.districts.find((d) => d.id === i.district_id) : null;
-  const reporter = opts.publicView ? store.users.find((u) => u.id === i.user_id) : null;
+  const reporter =
+    opts.publicView && i.user_id !== null ? store.users.find((u) => u.id === i.user_id) : null;
   const approxOnly = Boolean(opts.publicView && reporter?.privacy_prefs.share_approximate_only);
   const base: Record<string, unknown> = {
     id: i.id,
@@ -228,6 +245,7 @@ function incidentOut(store: Store, i: StoredIncident, opts: { publicView?: boole
       duplicate_of_id: i.duplicate_of_id ?? null,
       reviewed_at: i.reviewed_at,
       user_id: i.user_id,
+      reporter_type: i.reporter_type ?? (i.user_id !== null ? "citizen" : "guest"),
       history: i.history ?? [],
       media: i.media_blobs.map((m) => ({
         id: m.id,
@@ -239,6 +257,7 @@ function incidentOut(store: Store, i: StoredIncident, opts: { publicView?: boole
     });
   }
   if (opts.similar !== undefined) base.similar_nearby = opts.similar;
+  if (opts.guestCode) base.guest_tracking_code = opts.guestCode;
   return base;
 }
 
@@ -484,6 +503,11 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
   if (route === "auth/logout" && method === "POST") {
     if (!verifyMutationOrigin(req)) return err(403, "Cross-origin logout rejected");
     return clearSessionCookie(NextResponse.json({ ok: true }), req);
+  }
+
+  if (route === "auth/session" && method === "GET") {
+    const u = getOptionalUser(req, store);
+    return NextResponse.json({ authenticated: Boolean(u), user: u ? userOut(u) : null });
   }
 
   if (route === "auth/me" && method === "GET") {
@@ -782,8 +806,6 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
 
   // ---- DISTRICTS ----
   if (route === "districts/boundaries/all" && method === "GET") {
-    const u = getUser(req, store);
-    if (u instanceof NextResponse) return u;
     const features = [...store.districts]
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((d) => {
@@ -807,8 +829,6 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
 
   if (route === "districts") {
     if (method === "GET") {
-      const u = getUser(req, store);
-      if (u instanceof NextResponse) return u;
       return NextResponse.json([...store.districts].sort((a, b) => a.name.localeCompare(b.name)));
     }
     if (method === "POST") {
@@ -846,8 +866,6 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
     if (!Number.isFinite(id)) return err(404, "District not found");
     const d = store.districts.find((x) => x.id === id);
     if (method === "GET") {
-      const u = getUser(req, store);
-      if (u instanceof NextResponse) return u;
       if (!d) return err(404, "District not found");
       return NextResponse.json(d);
     }
@@ -883,8 +901,6 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
     const id = Number(segs[1]);
     const d = store.districts.find((x) => x.id === id);
     if (method === "GET") {
-      const u = getUser(req, store);
-      if (u instanceof NextResponse) return u;
       if (!d) return err(404, "District not found");
       const b = store.boundaries.get(id);
       if (!b) return err(404, "No verified boundary is available for this district");
@@ -1095,8 +1111,6 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
 
   if (route === "resources") {
     if (method === "GET") {
-      const u = getUser(req, store);
-      if (u instanceof NextResponse) return u;
       const sp = req.nextUrl.searchParams;
       const type = sp.get("type");
       const did = sp.get("district_id");
@@ -1158,8 +1172,6 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
     const id = Number(segs[1]);
     const r = store.resources.find((x) => x.id === id);
     if (method === "GET") {
-      const u = getUser(req, store);
-      if (u instanceof NextResponse) return u;
       if (!r) return err(404, "Resource not found");
       return NextResponse.json(r);
     }
@@ -1269,14 +1281,48 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
   }
 
   if (route === "incidents/public" && method === "GET") {
-    const u = getUser(req, store);
-    if (u instanceof NextResponse) return u;
     return NextResponse.json(
       store.incidents
         .filter((i) => i.status === "verified" || i.status === "response_assigned" || i.status === "resolved")
         .slice(0, 300)
         .map((i) => incidentOut(store, i, { publicView: true }))
     );
+  }
+
+  if (route === "incidents/track" && method === "POST") {
+    const ip = clientIp(req);
+    if (!trackRateOk(ip)) {
+      return err(429, "Too many tracking attempts. Please wait a few minutes and try again.");
+    }
+    const body = await readJson<{ code?: string; verification_code?: string }>(req);
+    if (body instanceof NextResponse) return body;
+    const code = (body.code ?? "").trim().toUpperCase();
+    const pin = (body.verification_code ?? "").trim().toUpperCase();
+    if (!code) return err(422, "Reference ID is required");
+
+    const inc = store.incidents.find((i) => i.code.toUpperCase() === code);
+    const maybeUser = getOptionalUser(req, store);
+    const isOwner = Boolean(maybeUser && inc && (inc.user_id === maybeUser.id || maybeUser.role === "admin"));
+    const pinValid = Boolean(inc?.guest_secret_hash && pin && verifyOpaqueSecret(pin, inc.guest_secret_hash));
+
+    if (!inc || (!isOwner && !pinValid)) {
+      return err(404, "No report matched that Reference ID and Verification PIN");
+    }
+
+    const district = inc.district_id ? store.districts.find((d) => d.id === inc.district_id) : null;
+    return NextResponse.json({
+      code: inc.code,
+      type: inc.type,
+      severity: inc.severity,
+      status: inc.status,
+      district_name: inc.district_name ?? district?.name ?? null,
+      assigned_team: inc.assigned_team ?? null,
+      admin_note: inc.admin_note ?? null,
+      created_at: inc.created_at,
+      observed_at: inc.observed_at,
+      photo_count: inc.media_blobs.length,
+      history: inc.history ?? [],
+    });
   }
 
   if (route === "incidents/stats" && method === "GET") {
@@ -1304,8 +1350,11 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       return NextResponse.json(rows.slice(0, 500).map((i) => incidentOut(store, i)));
     }
     if (method === "POST") {
-      const u = getUser(req, store);
-      if (u instanceof NextResponse) return u;
+      if (hasSessionCookie(req) && !verifyMutationOrigin(req)) {
+        return err(403, "Cross-origin state mutation rejected");
+      }
+      const u = getOptionalUser(req, store);
+      const ip = clientIp(req);
       let fd: FormData;
       try {
         fd = await req.formData();
@@ -1359,7 +1408,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
         });
       }
 
-      if (!incidentRateOk(u.id)) {
+      if (!incidentRateOk(u ? u.id : `guest:${ip}`)) {
         return err(429, "Too many reports in the last hour. If this is an emergency, call Police 15.");
       }
 
@@ -1383,10 +1432,14 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
 
       const incId = store.nextId.incident++;
       const nowIso = new Date().toISOString();
+      const guestTrackingCode = !u ? generateGuestVerificationCode(8) : undefined;
+      const reporterType: StoredIncident["reporter_type"] = u ? (u.role === "admin" ? "admin" : "citizen") : "guest";
       const inc: StoredIncident = {
         id: incId,
         code: newIncidentCode(store),
-        user_id: u.id,
+        user_id: u ? u.id : null,
+        reporter_type: reporterType,
+        guest_secret_hash: guestTrackingCode ? hashOpaqueToken(guestTrackingCode) : null,
         type: type as IncidentType,
         severity: severity as IncidentSeverity,
         description,
@@ -1410,12 +1463,24 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
         reviewed_at: null,
         created_at: nowIso,
         photo_count: processed.length,
-        history: [{ status: "pending", by_role: u.role, note: "Submitted by citizen", at: nowIso }],
+        history: [
+          {
+            status: "pending",
+            by_role: reporterType,
+            note: u ? "Submitted by citizen" : "Submitted by guest reporter",
+            at: nowIso,
+          },
+        ],
         media_blobs: processed.map((m) => ({ ...m, id: store.nextId.media++, incident_id: incId })),
       };
       store.incidents.unshift(inc);
-      addAudit(store, u.id, "submit", "incident", inc.id, { code: inc.code, type, photos: processed.length });
-      if (u.notification_prefs.incident_updates) {
+      addAudit(store, u?.id ?? null, "submit", "incident", inc.id, {
+        code: inc.code,
+        type,
+        photos: processed.length,
+        reporter_type: reporterType,
+      });
+      if (u && u.notification_prefs.incident_updates) {
         pushNotification(store, {
           user_id: u.id,
           kind: "incident",
@@ -1424,7 +1489,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
           link: "/report",
         });
       }
-      return NextResponse.json(incidentOut(store, inc, { similar }), { status: 201 });
+      return NextResponse.json(incidentOut(store, inc, { similar, guestCode: guestTrackingCode }), { status: 201 });
     }
   }
 
@@ -1516,7 +1581,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       ];
       addAudit(store, admin.id, "review", "incident", inc.id, { code: inc.code, ...body });
 
-      const reporter = store.users.find((u) => u.id === inc.user_id);
+      const reporter = inc.user_id !== null ? store.users.find((u) => u.id === inc.user_id) : null;
       if (reporter && reporter.notification_prefs.incident_updates && prevStatus !== inc.status) {
         pushNotification(store, {
           user_id: reporter.id,
@@ -1540,9 +1605,12 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
 
   // ---- ASSISTANT ----
   if (route === "assistant/chat" && method === "POST") {
-    const u = getUser(req, store);
-    if (u instanceof NextResponse) return u;
-    if (!aiRateOk(u.id, store.aiConfig.rate_limit_per_minute)) {
+    if (hasSessionCookie(req) && !verifyMutationOrigin(req)) {
+      return err(403, "Cross-origin state mutation rejected");
+    }
+    const u = getOptionalUser(req, store);
+    const ip = clientIp(req);
+    if (!aiRateOk(u ? u.id : `guest:${ip}`, store.aiConfig.rate_limit_per_minute)) {
       return err(429, "Too many AI requests. Please wait a minute and try again.");
     }
     const body = await readJson<{
@@ -1640,12 +1708,14 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
     }
 
     if (body.simulation_id) {
+      if (!u) return err(401, "Sign in to attach simulations");
       const s = store.simulations.find((x) => x.id === body.simulation_id);
       if (!s || (u.role !== "admin" && s.user_id !== u.id)) return err(404, "Simulation not found");
       ctx.simulation = { id: s.id, params: s.params, status: s.status, indicators: s.results?.risk_indicators ?? null };
     }
 
     if (body.assessment_id) {
+      if (!u) return err(401, "Sign in to attach assessments");
       const a = store.assessments.find((x) => x.id === body.assessment_id);
       if (!a || (u.role !== "admin" && a.user_id !== u.id)) return err(404, "Assessment not found");
       ctx.assessment = { id: a.id, category: a.category, score: a.score, result: a.result };
@@ -1660,7 +1730,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       const { reply, provider, model } = await callAi(prompt, { language, config: store.aiConfig });
       store.aiLogs.unshift({
         id: store.nextId.aiLog++,
-        user_id: u.id,
+        user_id: u?.id ?? null,
         language,
         provider,
         model,
@@ -1683,7 +1753,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       const msg = e instanceof Error ? e.message : "Unknown AI failure";
       store.aiLogs.unshift({
         id: store.nextId.aiLog++,
-        user_id: u.id,
+        user_id: u?.id ?? null,
         language,
         provider: usedProvider,
         model: store.aiConfig.model,

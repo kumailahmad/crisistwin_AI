@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { assess } from "../demo/riskEngine";
-import { createAccessToken, decodeAccessToken, hashPassword, verifyPassword } from "../server/auth";
+import {
+  createAccessToken,
+  decodeAccessToken,
+  generateGuestVerificationCode,
+  hashOpaqueToken,
+  hashPassword,
+  incidentRateOk,
+  trackRateOk,
+  verifyOpaqueSecret,
+  verifyPassword,
+} from "../server/auth";
 import { inBalochistan, kmBetween, pointInGeometry, validatePolygon } from "../server/geo";
 import { buildCsv, compareSimulations, computeAnalytics, csvCell } from "../utils/analytics";
 import { createOfflineDraft, parseDrafts } from "../utils/offlineDrafts";
@@ -131,4 +141,17 @@ test("INCIDENT_TYPES includes all 9 citizen emergency reporting categories", () 
   ] as const) {
     assert.ok(primaryIds.includes(required), `Missing primary citizen type: ${required}`);
   }
+});
+
+test("guest verification PINs verify in constant time and support IP rate limiting", () => {
+  const pin = generateGuestVerificationCode(8);
+  assert.equal(pin.length, 8);
+  assert.match(pin, /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{8}$/);
+  const hash = hashOpaqueToken(pin);
+  assert.equal(verifyOpaqueSecret(pin, hash), true);
+  assert.equal(verifyOpaqueSecret("WRONGPIN", hash), false);
+  assert.equal(verifyOpaqueSecret("", hash), false);
+
+  assert.equal(incidentRateOk("guest:203.0.113.10"), true);
+  assert.equal(trackRateOk("203.0.113.10"), true);
 });

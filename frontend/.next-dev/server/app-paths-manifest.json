@@ -1,8 +1,11 @@
 {
   "/api/v1/[...path]/route": "app/api/v1/[...path]/route.js",
-  "/login/page": "app/login/page.js",
   "/page": "app/page.js",
   "/offline/page": "app/offline/page.js",
-  "/(app)/dashboard/page": "app/(app)/dashboard/page.js",
-  "/(app)/emergency/page": "app/(app)/emergency/page.js"
+  "/login/page": "app/login/page.js",
+  "/(app)/resources/page": "app/(app)/resources/page.js",
+  "/(app)/emergency/page": "app/(app)/emergency/page.js",
+  "/(app)/assistant/page": "app/(app)/assistant/page.js",
+  "/staff-access/page": "app/staff-access/page.js",
+  "/(app)/admin/page": "app/(app)/admin/page.js"
 }

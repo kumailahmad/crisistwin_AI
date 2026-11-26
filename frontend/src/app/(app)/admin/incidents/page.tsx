@@ -115,6 +115,7 @@ export default function AdminIncidents() {
               <div className="flex items-center justify-between gap-2">
                 <span className="font-mono text-xs text-cyan-300">{i.code}</span>
                 <div className="flex flex-wrap gap-1.5">
+                  {i.reporter_type === "guest" && <Badge tone="neutral">Guest</Badge>}
                   {!!i.flag_count && (
                     <Badge tone="amber">
                       <Flag className="h-3 w-3" /> {i.flag_count} flag(s)
@@ -149,6 +150,7 @@ export default function AdminIncidents() {
           <div className="space-y-4 text-sm">
             <div className="flex flex-wrap gap-2">
               <Badge tone={tone[sel.status]}>{STATUS_LABEL[sel.status]}</Badge>
+              {sel.reporter_type === "guest" && <Badge tone="neutral">Guest reporter</Badge>}
               <Badge>{t(sel.type)?.label}</Badge>
               <Badge>{SEVERITY[sel.severity].label} (reporter)</Badge>
               {sel.district_name && <Badge tone="cyan">{sel.district_name}</Badge>}

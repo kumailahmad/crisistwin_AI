@@ -1,7 +1,7 @@
 "use client";
 import { Activity, CloudRain, Download, FileSpreadsheet, MapPinned, Printer, Siren } from "lucide-react";
 import { ColorBars } from "@/components/charts";
-import { TYPE_META } from "@/components/map/CrisisMap";
+import { TYPE_META } from "@/components/map/typeMeta";
 import { Badge, Button, Card, CardHeader, EmptyState, ErrorState, Notice, PageHeader, RiskBadge, Skeleton, StatCard, useToast } from "@/components/ui";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { fmtDate, useAsync } from "@/lib/hooks";

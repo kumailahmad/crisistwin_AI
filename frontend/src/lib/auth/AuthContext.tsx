@@ -2,12 +2,14 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { auth as authApi } from "@/lib/services";
 import { clearCache } from "@/lib/hooks";
-import { isDemo, setDemo, setToken } from "@/lib/auth/token";
+import { isGuestChosen, setDemo, setGuestChosen, setToken } from "@/lib/auth/token";
 import type { User } from "@/lib/types";
 
 type Ctx = {
   user: User | null;
   demo: boolean;
+  guest: boolean;
+  guestChosen: boolean;
   loading: boolean;
   login: (email: string, password: string) => Promise<User>;
   register: (
@@ -18,32 +20,25 @@ type Ctx = {
   ) => Promise<User & { access_token?: string; verification_notice?: string; smtp_configured?: boolean }>;
   bootstrapAdmin: (email: string, password: string, full_name?: string) => Promise<User>;
   refreshUser: () => Promise<User | null>;
+  continueAsGuest: () => void;
   enterDemo: () => void;
   logout: () => Promise<void>;
 };
 
 const AuthCtx = createContext<Ctx | null>(null);
-const DEMO_USER: User = {
-  id: 0,
-  email: "demo@local",
-  full_name: "Demo visitor",
-  role: "user",
-  is_active: true,
-  notification_prefs: { district_alerts: true, incident_updates: true, public_safety: true },
-  privacy_prefs: { share_approximate_only: false },
-};
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [demo, setDemoState] = useState(false);
+  const [guestChosen, setGuestChosenState] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const logout = useCallback(async () => {
     clearCache();
     setToken(null);
     setDemo(false);
+    setGuestChosen(false);
     setUser(null);
-    setDemoState(false);
+    setGuestChosenState(false);
     try {
       await authApi.logout();
     } catch {
@@ -52,16 +47,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const refreshUser = useCallback(async () => {
-    if (isDemo()) {
-      setDemoState(true);
-      setUser(DEMO_USER);
-      return DEMO_USER;
-    }
     try {
-      const me = await authApi.me();
-      setDemoState(false);
-      setUser(me);
-      return me;
+      const res = await authApi.session();
+      if (res.user) {
+        setUser(res.user);
+        setGuestChosen(false);
+        setGuestChosenState(false);
+        return res.user;
+      }
+      setToken(null);
+      setUser(null);
+      return null;
     } catch {
       setToken(null);
       setUser(null);
@@ -71,22 +67,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     (async () => {
-      if (isDemo()) {
-        setUser(DEMO_USER);
-        setDemoState(true);
-      } else {
-        try {
-          const me = await authApi.me();
-          setUser(me);
-        } catch {
+      // Clear legacy browser-only demo flag if left behind from older versions
+      setDemo(false);
+      setGuestChosenState(isGuestChosen());
+      try {
+        const res = await authApi.session();
+        if (res.user) {
+          setUser(res.user);
+        } else {
           setToken(null);
           setUser(null);
         }
+      } catch {
+        setToken(null);
+        setUser(null);
       }
       setLoading(false);
     })();
     const onUnauth = () => {
-      if (!isDemo()) setUser(null);
+      setUser(null);
     };
     window.addEventListener("ct:unauthorized", onUnauth);
     return () => window.removeEventListener("ct:unauthorized", onUnauth);
@@ -96,7 +95,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const res = await authApi.login(email, password);
     clearCache();
     setDemo(false);
-    setDemoState(false);
+    setGuestChosen(false);
+    setGuestChosenState(false);
     setToken(res.access_token);
     const me = res.user ?? (await authApi.me());
     setUser(me);
@@ -108,7 +108,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const res = await authApi.register(email, password, full_name, district_id);
       clearCache();
       setDemo(false);
-      setDemoState(false);
+      setGuestChosen(false);
+      setGuestChosenState(false);
       setToken(res.access_token ?? null);
       setUser(res);
       return res;
@@ -120,23 +121,39 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const res = await authApi.bootstrapAdmin({ email, password, full_name });
     clearCache();
     setDemo(false);
-    setDemoState(false);
+    setGuestChosen(false);
+    setGuestChosenState(false);
     setToken(res.access_token);
     setUser(res.user);
     return res.user;
   }, []);
 
-  const enterDemo = useCallback(() => {
-    clearCache();
+  const continueAsGuest = useCallback(() => {
+    setDemo(false);
     setToken(null);
-    setDemo(true);
-    setDemoState(true);
-    setUser(DEMO_USER);
+    setGuestChosen(true);
+    setGuestChosenState(true);
+    setUser(null);
   }, []);
 
+  const enterDemo = continueAsGuest;
+
   const value = useMemo(
-    () => ({ user, demo, loading, login, register, bootstrapAdmin, refreshUser, enterDemo, logout }),
-    [user, demo, loading, login, register, bootstrapAdmin, refreshUser, enterDemo, logout]
+    () => ({
+      user,
+      demo: false,
+      guest: !user,
+      guestChosen,
+      loading,
+      login,
+      register,
+      bootstrapAdmin,
+      refreshUser,
+      continueAsGuest,
+      enterDemo,
+      logout,
+    }),
+    [user, guestChosen, loading, login, register, bootstrapAdmin, refreshUser, continueAsGuest, enterDemo, logout]
   );
   return <AuthCtx.Provider value={value}>{children}</AuthCtx.Provider>;
 }

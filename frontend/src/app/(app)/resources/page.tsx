@@ -16,7 +16,7 @@ import {
   Siren,
 } from "lucide-react";
 import { MapView } from "@/components/map/MapView";
-import { TYPE_META } from "@/components/map/CrisisMap";
+import { TYPE_META } from "@/components/map/typeMeta";
 import {
   Badge,
   Button,

@@ -34,7 +34,9 @@ import {
 } from "@/components/ui";
 import { LocationPicker, type Picked } from "@/components/incidents/LocationPicker";
 import { EvidencePhoto, PhotoPicker } from "@/components/incidents/Photos";
+import { TrackReportBox } from "@/components/incidents/TrackReportBox";
 import { useAuth } from "@/lib/auth/AuthContext";
+import { saveGuestReceipt } from "@/lib/auth/token";
 import { cn } from "@/lib/cn";
 import { fmtDate, useAsync } from "@/lib/hooks";
 import { incidents, loadOpenBoundaries } from "@/lib/services";
@@ -104,8 +106,12 @@ export default function ReportEmergencyPage() {
   const [flagReason, setFlagReason] = useState("");
   const [flagBusy, setFlagBusy] = useState(false);
 
-  const mine = useAsync(() => incidents.mine(), [], "my-incidents");
-  const pub = useAsync(() => incidents.public(), [], "public-incidents");
+  const mine = useAsync(
+    () => (user ? incidents.mine().catch(() => []) : Promise.resolve([])),
+    [user?.id],
+    user ? `my-incidents-${user.id}` : undefined
+  );
+  const pub = useAsync(() => incidents.public().catch(() => []), [], "public-incidents");
   const geoDistricts = useAsync(() => loadOpenBoundaries(), [], "report-districts");
 
   useEffect(() => {
@@ -216,8 +222,17 @@ export default function ReportEmergencyPage() {
         },
         files
       );
+      if (r.guest_tracking_code) {
+        saveGuestReceipt({
+          code: r.code,
+          verification_code: r.guest_tracking_code,
+          type: r.type,
+          district_name: r.district_name,
+          created_at: r.created_at,
+        });
+      }
       setDone(r);
-      mine.reload();
+      if (user) mine.reload();
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (err) {
       toast("err", (err as Error).message);
@@ -250,8 +265,17 @@ export default function ReportEmergencyPage() {
         []
       );
       setDrafts(removeOfflineDraft(d.local_id));
+      if (r.guest_tracking_code) {
+        saveGuestReceipt({
+          code: r.code,
+          verification_code: r.guest_tracking_code,
+          type: r.type,
+          district_name: r.district_name,
+          created_at: r.created_at,
+        });
+      }
       setDone(r);
-      mine.reload();
+      if (user) mine.reload();
       toast("ok", `Draft submitted (${r.code})`);
     } catch (err) {
       toast("err", (err as Error).message);
@@ -321,9 +345,9 @@ export default function ReportEmergencyPage() {
         </Notice>
       )}
 
-      {demo && (
+      {!user && (
         <Notice tone="cyan">
-          Preview mode: reports are stored locally in this browser only. Sign in with an account to send reports to response administrators.
+          Guest reporting is active — your report is submitted directly to Balochistan response coordinators with a private Reference ID and Verification PIN.
         </Notice>
       )}
 
@@ -379,6 +403,20 @@ export default function ReportEmergencyPage() {
             {done.code}
           </p>
 
+          {done.guest_tracking_code && (
+            <div className="mx-auto mt-4 max-w-md rounded-2xl border border-[#21C7D9]/50 bg-[#21C7D9]/10 p-4">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-[#0b8a99] dark:text-[#21C7D9]">
+                Save Your One-Time Verification PIN
+              </p>
+              <p className="mt-1 font-mono text-2xl font-extrabold tracking-widest text-ct-text tabular-nums" data-testid="guest-pin">
+                {done.guest_tracking_code}
+              </p>
+              <p className="mt-1 text-xs text-ct-secondary">
+                Use both your Reference ID and this PIN under Track My Report to check live coordinator updates.
+              </p>
+            </div>
+          )}
+
           <div className="mx-auto mt-5 grid max-w-xl gap-3 text-left sm:grid-cols-2">
             <div className="rounded-xl border border-ct-border bg-ct-soft p-3.5">
               <p className="text-[11px] font-bold uppercase tracking-wider text-ct-muted">
@@ -401,7 +439,7 @@ export default function ReportEmergencyPage() {
           <p className="mx-auto mt-4 max-w-lg text-xs text-ct-muted">
             {done.district_name ? `Detected district: ${done.district_name}. ` : ""}
             {done.photo_count ? `${done.photo_count} photo(s) attached. ` : ""}
-            Track live status updates below under My Reports.
+            Track live status updates below under {user ? "My Reports" : "Track My Report"}.
           </p>
 
           {!!done.similar_nearby && (
@@ -412,9 +450,11 @@ export default function ReportEmergencyPage() {
 
           <div className="mt-6 flex flex-wrap justify-center gap-3">
             <Button onClick={resetWizard}>Submit Another Report</Button>
-            <Button variant="outline" onClick={() => setView(done)}>
-              Track Report Progress
-            </Button>
+            {user && (
+              <Button variant="outline" onClick={() => setView(done)}>
+                Track Report Progress
+              </Button>
+            )}
           </div>
         </Card>
       ) : (
@@ -713,13 +753,18 @@ export default function ReportEmergencyPage() {
         </Card>
       )}
 
-      {/* My Submitted Reports */}
+      {/* My Submitted Reports / Track Guest Report */}
       <section aria-labelledby="mine-h" className="space-y-3">
         <h2 id="mine-h" className="flex items-center gap-2 text-lg font-bold text-ct-text">
           <ClipboardList className="h-5 w-5 text-[#0b8a99] dark:text-[#21C7D9]" />
-          My Reports &amp; Progress
+          {user ? "My Reports & Progress" : "Track My Report"}
         </h2>
-        {mine.loading ? (
+        {!user ? (
+          <TrackReportBox
+            initialCode={done?.code ?? ""}
+            initialPin={done?.guest_tracking_code ?? ""}
+          />
+        ) : mine.loading ? (
           <Skeleton className="h-24 w-full" />
         ) : mine.data?.length ? (
           <div className="grid gap-3 sm:grid-cols-2">

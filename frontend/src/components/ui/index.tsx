@@ -5,9 +5,42 @@ import { cn } from "@/lib/cn";
 import { RISK_COLORS } from "@/lib/types";
 
 /* ---------- Button ---------- */
+export type ButtonVariant = "primary" | "emergency" | "navy" | "ghost" | "outline" | "danger";
+export type ButtonSize = "sm" | "md" | "lg";
+
+export function buttonClasses({
+  variant = "primary",
+  size = "md",
+  className,
+}: {
+  variant?: ButtonVariant;
+  size?: ButtonSize;
+  className?: string;
+} = {}) {
+  const v: Record<ButtonVariant, string> = {
+    primary: "bg-[#21C7D9] text-[#0B1424] hover:bg-[#3ad3e3] shadow-glow font-semibold",
+    emergency: "bg-[#DC454D] text-white hover:bg-[#c53a42] shadow-sm font-bold",
+    navy: "bg-[#0B1424] text-[#EDF5FA] hover:bg-[#11243A] dark:bg-[#21C7D9] dark:text-[#0B1424] font-semibold",
+    ghost: "text-ct-secondary hover:bg-ct-soft hover:text-ct-text",
+    outline: "border border-ct-border bg-ct-surface text-ct-text hover:border-[#21C7D9] hover:bg-ct-soft",
+    danger: "bg-[#DC454D]/12 text-[#DC454D] dark:text-red-300 border border-[#DC454D]/40 hover:bg-[#DC454D]/20 font-medium",
+  };
+  const s: Record<ButtonSize, string> = {
+    sm: "min-h-[38px] px-3 py-1.5 text-xs",
+    md: "min-h-[44px] px-4 py-2 text-sm",
+    lg: "min-h-[52px] px-6 py-3 text-base",
+  };
+  return cn(
+    "inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl transition duration-150 disabled:cursor-not-allowed disabled:opacity-50",
+    s[size],
+    v[variant],
+    className
+  );
+}
+
 type BtnProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "primary" | "emergency" | "navy" | "ghost" | "outline" | "danger";
-  size?: "sm" | "md" | "lg";
+  variant?: ButtonVariant;
+  size?: ButtonSize;
   loading?: boolean;
 };
 
@@ -20,29 +53,11 @@ export function Button({
   disabled,
   ...p
 }: BtnProps) {
-  const v = {
-    primary: "bg-[#21C7D9] text-[#0B1424] hover:bg-[#3ad3e3] shadow-glow font-semibold",
-    emergency: "bg-[#DC454D] text-white hover:bg-[#c53a42] shadow-sm font-bold",
-    navy: "bg-[#0B1424] text-[#EDF5FA] hover:bg-[#11243A] dark:bg-[#21C7D9] dark:text-[#0B1424] font-semibold",
-    ghost: "text-ct-secondary hover:bg-ct-soft hover:text-ct-text",
-    outline: "border border-ct-border bg-ct-surface text-ct-text hover:border-[#21C7D9] hover:bg-ct-soft",
-    danger: "bg-[#DC454D]/12 text-[#DC454D] dark:text-red-300 border border-[#DC454D]/40 hover:bg-[#DC454D]/20 font-medium",
-  }[variant];
-  const s = {
-    sm: "min-h-[38px] px-3 py-1.5 text-xs",
-    md: "min-h-[44px] px-4 py-2 text-sm",
-    lg: "min-h-[52px] px-6 py-3 text-base",
-  }[size];
   return (
     <button
       {...p}
       disabled={disabled || loading}
-      className={cn(
-        "inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl transition duration-150 disabled:cursor-not-allowed disabled:opacity-50",
-        s,
-        v,
-        className
-      )}
+      className={buttonClasses({ variant, size, className })}
     >
       {loading && <Loader2 className="h-4 w-4 animate-spin" />}
       {children}

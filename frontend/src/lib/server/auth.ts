@@ -25,8 +25,30 @@ export function generateOpaqueToken(bytes = 24): string {
   return crypto.randomBytes(bytes).toString("hex");
 }
 
+const GUEST_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+export function generateGuestVerificationCode(length = 8): string {
+  const buf = crypto.randomBytes(length);
+  let out = "";
+  for (let i = 0; i < length; i++) {
+    out += GUEST_CODE_ALPHABET[buf[i] % GUEST_CODE_ALPHABET.length];
+  }
+  return out;
+}
+
 export function hashOpaqueToken(raw: string): string {
   return crypto.createHash("sha256").update(raw).digest("hex");
+}
+
+export function verifyOpaqueSecret(raw: string, storedHexHash: string): boolean {
+  if (!raw || !storedHexHash) return false;
+  try {
+    const actual = crypto.createHash("sha256").update(raw).digest();
+    const expected = Buffer.from(storedHexHash, "hex");
+    if (actual.length !== expected.length) return false;
+    return crypto.timingSafeEqual(actual, expected);
+  } catch {
+    return false;
+  }
 }
 
 function b64u(input: string | Buffer): string {
@@ -128,15 +150,17 @@ export function verifyMutationOrigin(req: NextRequest): boolean {
 
 const g = globalThis as unknown as {
   __ctLoginFails?: Map<string, number[]>;
-  __ctAiHits?: Map<number, number[]>;
-  __ctIncHits?: Map<number, number[]>;
-  __ctFlagHits?: Map<number, number[]>;
+  __ctAiHits?: Map<string | number, number[]>;
+  __ctIncHits?: Map<string | number, number[]>;
+  __ctFlagHits?: Map<string | number, number[]>;
+  __ctTrackHits?: Map<string, number[]>;
 };
 
 const loginFails: Map<string, number[]> = (g.__ctLoginFails ??= new Map());
-const aiHits: Map<number, number[]> = (g.__ctAiHits ??= new Map());
-const incHits: Map<number, number[]> = (g.__ctIncHits ??= new Map());
-const flagHits: Map<number, number[]> = (g.__ctFlagHits ??= new Map());
+const aiHits: Map<string | number, number[]> = (g.__ctAiHits ??= new Map());
+const incHits: Map<string | number, number[]> = (g.__ctIncHits ??= new Map());
+const flagHits: Map<string | number, number[]> = (g.__ctFlagHits ??= new Map());
+const trackHits: Map<string, number[]> = (g.__ctTrackHits ??= new Map());
 
 export function loginBlocked(ip: string, email: string): boolean {
   const key = `${ip}|${email.trim().toLowerCase()}`;
@@ -158,39 +182,51 @@ export function loginOk(ip: string, email: string): void {
   loginFails.delete(`${ip}|${email.trim().toLowerCase()}`);
 }
 
-export function aiRateOk(userId: number, overrideLimit?: number): boolean {
+export function aiRateOk(key: string | number, overrideLimit?: number): boolean {
   const limit = Math.max(1, overrideLimit ?? Number(process.env.AI_RATE_LIMIT_PER_MINUTE || "10"));
   const cutoff = Date.now() - 60_000;
-  const arr = (aiHits.get(userId) ?? []).filter((t) => t > cutoff);
+  const arr = (aiHits.get(key) ?? []).filter((t) => t > cutoff);
   if (arr.length >= limit) {
-    aiHits.set(userId, arr);
+    aiHits.set(key, arr);
     return false;
   }
   arr.push(Date.now());
-  aiHits.set(userId, arr);
+  aiHits.set(key, arr);
   return true;
 }
 
-export function incidentRateOk(userId: number): boolean {
+export function incidentRateOk(key: string | number): boolean {
   const cutoff = Date.now() - 3600_000;
-  const arr = (incHits.get(userId) ?? []).filter((t) => t > cutoff);
+  const arr = (incHits.get(key) ?? []).filter((t) => t > cutoff);
   if (arr.length >= 8) {
-    incHits.set(userId, arr);
+    incHits.set(key, arr);
     return false;
   }
   arr.push(Date.now());
-  incHits.set(userId, arr);
+  incHits.set(key, arr);
   return true;
 }
 
-export function flagRateOk(userId: number): boolean {
+export function flagRateOk(key: string | number): boolean {
   const cutoff = Date.now() - 3600_000;
-  const arr = (flagHits.get(userId) ?? []).filter((t) => t > cutoff);
+  const arr = (flagHits.get(key) ?? []).filter((t) => t > cutoff);
   if (arr.length >= 12) {
-    flagHits.set(userId, arr);
+    flagHits.set(key, arr);
     return false;
   }
   arr.push(Date.now());
-  flagHits.set(userId, arr);
+  flagHits.set(key, arr);
+  return true;
+}
+
+export function trackRateOk(ip: string): boolean {
+  const cutoff = Date.now() - 5 * 60_000;
+  const arr = (trackHits.get(ip) ?? []).filter((t) => t > cutoff);
+  if (arr.length >= 25) {
+    trackHits.set(ip, arr);
+    return false;
+  }
+  arr.push(Date.now());
+  trackHits.set(ip, arr);
   return true;
 }

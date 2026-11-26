@@ -57,7 +57,9 @@ export interface StoredMedia {
 }
 
 export interface StoredIncident extends Incident {
-  user_id: number;
+  user_id: number | null;
+  reporter_type?: "citizen" | "guest" | "admin";
+  guest_secret_hash?: string | null;
   reviewed_by: number | null;
   flagged_by: number[];
   media_blobs: StoredMedia[];

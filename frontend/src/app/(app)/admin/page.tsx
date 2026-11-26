@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { Activity, Bot, CheckCircle2, Circle, CloudRain, Database, MapPinned, Megaphone, ShieldAlert, Siren, Users } from "lucide-react";
 import { ColorBars } from "@/components/charts";
-import { TYPE_META } from "@/components/map/CrisisMap";
+import { TYPE_META } from "@/components/map/typeMeta";
 import { Badge, Card, CardHeader, ErrorState, PageHeader, Skeleton, StatCard } from "@/components/ui";
 import { fmtDate, useAsync } from "@/lib/hooks";
 import { admin } from "@/lib/services";

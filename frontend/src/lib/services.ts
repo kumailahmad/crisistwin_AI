@@ -27,6 +27,7 @@ import type {
   Simulation,
   SimulationInput,
   SimulationResults,
+  TrackedIncident,
   User,
 } from "@/lib/types";
 
@@ -65,6 +66,7 @@ export const auth = {
       json: { email, password, full_name, district_id },
     }),
   me: () => api<User>("/auth/me"),
+  session: () => api<{ authenticated: boolean; user: User | null }>("/auth/session"),
   bootstrapStatus: () =>
     api<{ initialized: boolean; env_admin_configured: boolean; allow_public_registration: boolean; smtp_configured: boolean }>(
       "/auth/bootstrap-status"
@@ -94,7 +96,6 @@ export const users = {
 
 export const alerts = {
   list: async (p: { district_id?: number; all?: boolean; include_expired?: boolean } = {}): Promise<AlertItem[]> => {
-    if (isDemo()) return [];
     const qs = new URLSearchParams();
     if (p.district_id) qs.set("district_id", String(p.district_id));
     if (p.all) qs.set("all", "1");
@@ -127,15 +128,13 @@ export const notifications = {
 };
 
 export const districts = {
-  list: async (): Promise<District[]> => (isDemo() ? demoDistricts() : api<District[]>("/districts")),
+  list: async (): Promise<District[]> => api<District[]>("/districts"),
   boundaries: async (list: District[]): Promise<{ fc: BoundaryCollection; origin: BoundaryOrigin }> => {
-    if (!isDemo()) {
-      try {
-        const fc = await api<GeoJSON.FeatureCollection>("/districts/boundaries/all");
-        if (fc.features.length) return { fc: fc as unknown as BoundaryCollection, origin: "api" };
-      } catch {
-        /* fall through to open data */
-      }
+    try {
+      const fc = await api<GeoJSON.FeatureCollection>("/districts/boundaries/all");
+      if (fc.features.length) return { fc: fc as unknown as BoundaryCollection, origin: "api" };
+    } catch {
+      /* fall through to open data */
     }
     const open = await loadOpenBoundaries();
     const byName = new Map(list.map((d) => [d.name.toLowerCase(), d]));
@@ -165,7 +164,6 @@ export const districts = {
 
 export const resources = {
   list: async (p: { type?: string; q?: string; district_id?: number; lat?: number; lon?: number } = {}): Promise<Resource[]> => {
-    if (isDemo()) return [];
     const qs = new URLSearchParams(
       Object.entries(p)
         .filter(([, v]) => v !== undefined && v !== "")
@@ -323,34 +321,6 @@ export type IncidentForm = {
 
 export const incidents = {
   submit: async (f: IncidentForm, photos: File[]): Promise<Incident> => {
-    if (isDemo()) {
-      const { blobToDataUrl } = await import("@/lib/image");
-      const thumbs = await Promise.all(photos.slice(0, 3).map((p) => blobToDataUrl(p)));
-      const code = `DEMO-${Date.now().toString(36).toUpperCase().slice(-5)}`;
-      const nowIso = new Date().toISOString();
-      const row = demoStore.add<Incident>("incidents", {
-        code,
-        type: f.type,
-        severity: f.severity,
-        description: f.description,
-        latitude: f.latitude,
-        longitude: f.longitude,
-        place_text: f.place_text ?? null,
-        district_id: null,
-        district_name: null,
-        status: "pending",
-        created_at: nowIso,
-        observed_at: f.observed_at ?? null,
-        photo_count: thumbs.length,
-        accuracy_m: f.accuracy_m ?? null,
-        location_source: f.location_source,
-        contact_phone: f.contact_phone ?? null,
-        people_affected: f.people_affected ?? null,
-        history: [{ status: "pending", by_role: "user", note: "Saved in demo mode (browser only)", at: nowIso }],
-        media: thumbs.map((local, i) => ({ id: i + 1, width: 0, height: 0, size: local.length, sha256: "", local })),
-      });
-      return row;
-    }
     const fd = new FormData();
     Object.entries(f).forEach(([k, v]) => {
       if (v !== undefined && v !== null && v !== "") fd.append(k, String(v));
@@ -358,8 +328,10 @@ export const incidents = {
     photos.forEach((p) => fd.append("photos", p, p.name));
     return api<Incident>("/incidents", { method: "POST", body: fd });
   },
-  mine: async (): Promise<Incident[]> => (isDemo() ? demoStore.list<Incident>("incidents") : api<Incident[]>("/incidents/mine")),
-  public: async (): Promise<Incident[]> => (isDemo() ? [] : api<Incident[]>("/incidents/public")),
+  mine: async (): Promise<Incident[]> => api<Incident[]>("/incidents/mine"),
+  public: async (): Promise<Incident[]> => api<Incident[]>("/incidents/public"),
+  track: (b: { code: string; verification_code: string }) =>
+    api<TrackedIncident>("/incidents/track", { method: "POST", json: b }),
   list: (status?: IncidentStatus | "") => api<Incident[]>(`/incidents${status ? `?status=${status}` : ""}`),
   stats: () =>
     api<{ total: number; pending: number; under_review: number; verified: number; response_assigned: number; rejected: number; resolved: number }>(

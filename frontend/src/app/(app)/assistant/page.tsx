@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useRef, useState } from "react";
 import {
   Bot,
   Loader2,
@@ -19,7 +20,6 @@ import {
   Button,
   Card,
   ErrorState,
-  Notice,
   PageHeader,
   Select,
   Textarea,
@@ -104,8 +104,9 @@ function getSpeechConstructor(): (new () => SpeechRecLike) | null {
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
-export default function AssistantPage() {
-  const { demo, user } = useAuth();
+function AssistantContent() {
+  const { user } = useAuth();
+  const sp = useSearchParams();
   const ds = useAsync(() => districts.list(), [], "districts");
   const loc = useCitizenLocation(ds.data ?? []);
 
@@ -121,7 +122,12 @@ export default function AssistantPage() {
 
   const recRef = useRef<SpeechRecLike | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
-  const storeKey = `${STORE_KEY}_${user?.id ?? 0}`;
+  const storeKey = `${STORE_KEY}_${user?.id ?? "guest"}`;
+
+  useEffect(() => {
+    const q = sp.get("q");
+    if (q) setText(q);
+  }, [sp]);
 
   useEffect(() => {
     setSpeechSupported(Boolean(getSpeechConstructor()));
@@ -219,7 +225,7 @@ export default function AssistantPage() {
 
   async function send(t = text) {
     const clean = t.trim();
-    if (!clean || busy || demo) return;
+    if (!clean || busy) return;
     setMsgs((m) => [...m, { role: "user", text: clean, lang }]);
     setText("");
     setBusy(true);
@@ -291,20 +297,6 @@ export default function AssistantPage() {
         }
       />
 
-      {demo && (
-        <Notice tone="amber">
-          The live AI Safety Assistant requires a signed-in account and server AI configuration. In demo mode, use{" "}
-          <Link href="/report" className="font-semibold underline">
-            Report Emergency
-          </Link>{" "}
-          or{" "}
-          <Link href="/resources" className="font-semibold underline">
-            Get Help
-          </Link>{" "}
-          directly.
-        </Notice>
-      )}
-
       <div className="grid gap-5 lg:grid-cols-[1fr_310px]">
         <Card className="flex h-[calc(100vh-270px)] min-h-[500px] flex-col overflow-hidden">
           <div className="flex-1 space-y-4 overflow-auto p-5" aria-live="polite">
@@ -340,7 +332,7 @@ export default function AssistantPage() {
                     <button
                       key={q.label}
                       type="button"
-                      disabled={demo || busy}
+                      disabled={busy}
                       dir={isRtl ? "rtl" : "ltr"}
                       onClick={() => send(q.prompt)}
                       className={cn(
@@ -410,7 +402,7 @@ export default function AssistantPage() {
               type="button"
               variant={listening ? "emergency" : "outline"}
               onClick={toggleVoice}
-              disabled={demo || busy}
+              disabled={busy}
               title={
                 speechSupported
                   ? listening
@@ -437,10 +429,9 @@ export default function AssistantPage() {
               placeholder={PLACEHOLDER[lang]}
               className={cn("min-h-[44px] flex-1 resize-none", isRtl && "font-urdu")}
               rows={1}
-              disabled={demo}
               aria-label="Message"
             />
-            <Button type="submit" loading={busy} disabled={!text.trim() || demo} aria-label="Send message">
+            <Button type="submit" loading={busy} disabled={!text.trim()} aria-label="Send message">
               <Send className="h-4 w-4" />
             </Button>
           </form>
@@ -524,5 +515,13 @@ export default function AssistantPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function AssistantPage() {
+  return (
+    <Suspense>
+      <AssistantContent />
+    </Suspense>
   );
 }

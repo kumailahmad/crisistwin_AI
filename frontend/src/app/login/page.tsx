@@ -10,7 +10,7 @@ import { useAuth } from "@/lib/auth/AuthContext";
 import { auth } from "@/lib/services";
 
 function LoginForm() {
-  const { user, login, register, logout, enterDemo } = useAuth();
+  const { user, login, register, logout, continueAsGuest } = useAuth();
   const router = useRouter();
   const sp = useSearchParams();
   const [mode, setMode] = useState<"login" | "register" | "reset">("login");
@@ -23,7 +23,7 @@ function LoginForm() {
   const [show, setShow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const next = sp.get("next") ?? "/dashboard";
+  const next = sp.get("next") ?? "/";
   const submitting = useRef(false);
 
   useEffect(() => {
@@ -225,16 +225,16 @@ function LoginForm() {
                 variant="outline"
                 className="w-full"
                 onClick={() => {
-                  enterDemo();
+                  continueAsGuest();
                   router.replace(next);
                 }}
               >
                 <PlayCircle className="h-4 w-4" />
-                Continue in demo mode
+                Continue as Guest
               </Button>
               <div className="mt-4">
                 <Notice tone="cyan">
-                  Demo mode runs locally in your browser with real Balochistan district boundaries and client-side heuristic calculations.
+                  Guest access lets you submit emergency reports, view verified alerts, find hospitals, and use the AI safety assistant without an account.
                 </Notice>
               </div>
             </>

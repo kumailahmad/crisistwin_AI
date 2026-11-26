@@ -1,7 +1,7 @@
 "use client";
 import { useMemo, useState } from "react";
 import { FileUp, Pencil, Plus, Search, Trash2 } from "lucide-react";
-import { TYPE_META } from "@/components/map/CrisisMap";
+import { TYPE_META } from "@/components/map/typeMeta";
 import { BulkResourceUpload } from "@/components/BulkResourceUpload";
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Field, Input, Modal, Notice, PageHeader, Select, Skeleton, VerifiedBadge, useToast } from "@/components/ui";
 import { useAsync } from "@/lib/hooks";

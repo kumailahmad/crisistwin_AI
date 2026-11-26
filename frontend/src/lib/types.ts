@@ -330,10 +330,26 @@ export interface Incident {
   duplicate_of_id?: number | null;
   flag_count?: number;
   reviewed_at?: string | null;
-  user_id?: number;
+  user_id?: number | null;
+  reporter_type?: "citizen" | "guest" | "admin";
+  guest_tracking_code?: string;
   media?: IncidentMediaMeta[];
   history?: IncidentHistoryEntry[];
   similar_nearby?: number;
+}
+
+export interface TrackedIncident {
+  code: string;
+  type: IncidentType;
+  severity: IncidentSeverity;
+  status: IncidentStatus;
+  district_name: string | null;
+  assigned_team: string | null;
+  admin_note: string | null;
+  created_at: string;
+  observed_at: string | null;
+  photo_count: number;
+  history: IncidentHistoryEntry[];
 }
 
 export const INCIDENT_TYPES: { value: IncidentType; label: string; emoji: string; citizenPrimary?: boolean }[] = [

@@ -21,15 +21,10 @@ export type MapProps = {
   focus?: { lat: number; lon: number; label: string; bbox?: [number, number, number, number] } | null;
 };
 
+import { TYPE_META } from "./typeMeta";
+export { TYPE_META };
+
 const CENTER: [number, number] = [28.4, 65.6];
-export const TYPE_META: Record<string, { color: string; letter: string; label: string }> = {
-  hospital: { color: "#f87171", letter: "H", label: "Hospital" },
-  shelter: { color: "#22d3ee", letter: "S", label: "Shelter" },
-  rescue_center: { color: "#fb923c", letter: "R", label: "Rescue centre" },
-  fire_service: { color: "#f59e0b", letter: "F", label: "Fire service" },
-  ambulance: { color: "#34d399", letter: "A", label: "Ambulance" },
-  other: { color: "#a5b4fc", letter: "•", label: "Other facility" },
-};
 
 const icon = (type: string) => {
   const m = TYPE_META[type] ?? TYPE_META.other;
