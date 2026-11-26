@@ -4,12 +4,5 @@
     "files": [
       "static/chunks/_app-pages-browser_src_components_charts_SimpleCharts_tsx.js"
     ]
-  },
-  "components/map/MapView.tsx -> ./CrisisMap": {
-    "id": "components/map/MapView.tsx -> ./CrisisMap",
-    "files": [
-      "static/css/_app-pages-browser_src_components_map_CrisisMap_tsx.css",
-      "static/chunks/_app-pages-browser_src_components_map_CrisisMap_tsx.js"
-    ]
   }
 }

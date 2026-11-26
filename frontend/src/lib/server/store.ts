@@ -216,14 +216,49 @@ function loadPersistedStore(): Store | null {
   }
 }
 
+function syncEnvAdmin(store: Store): void {
+  const adminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+  const adminPw = process.env.ADMIN_PASSWORD;
+  if (!adminEmail || !adminPw || adminPw.length < 10) return;
+
+  const existing = store.users.find((u) => u.email === adminEmail);
+  if (existing) {
+    existing.hashed_password = hashPassword(adminPw);
+    existing.role = "admin";
+    existing.is_active = true;
+    existing.email_verified = true;
+    return;
+  }
+
+  store.users.push({
+    id: store.nextId.user++,
+    email: adminEmail,
+    hashed_password: hashPassword(adminPw),
+    full_name: "Administrator",
+    role: "admin",
+    is_active: true,
+    email_verified: true,
+    email_verify_token_hash: null,
+    reset_token_hash: null,
+    reset_expires_at: null,
+    phone: null,
+    district_id: null,
+    notification_prefs: { district_alerts: true, incident_updates: true, public_safety: true },
+    privacy_prefs: { share_approximate_only: false },
+    created_at: new Date().toISOString(),
+  });
+}
+
 function createInitialStore(): Store {
   const persisted = loadPersistedStore();
   if (persisted) {
-    // Re-sync environment-derived provider/SMTP flags on startup without wiping user data
+    // Re-sync environment-derived provider/SMTP flags and env admin credentials without wiping user data
     const freshAi = defaultAiConfig();
     persisted.aiConfig = { ...persisted.aiConfig, groq_configured: freshAi.groq_configured, gemini_configured: freshAi.gemini_configured };
     persisted.settings.smtp_configured = Boolean(process.env.SMTP_HOST?.trim());
     persisted.settings.ai_provider_configured = Boolean(persisted.aiConfig.provider_active);
+    syncEnvAdmin(persisted);
+    saveStore(persisted);
     return persisted;
   }
 
@@ -314,28 +349,7 @@ function createInitialStore(): Store {
     });
   }
 
-  // Optional ADMIN_EMAIL / ADMIN_PASSWORD from environment
-  const adminEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
-  const adminPw = process.env.ADMIN_PASSWORD;
-  if (adminEmail && adminPw && adminPw.length >= 10) {
-    store.users.push({
-      id: store.nextId.user++,
-      email: adminEmail,
-      hashed_password: hashPassword(adminPw),
-      full_name: "Administrator",
-      role: "admin",
-      is_active: true,
-      email_verified: true,
-      email_verify_token_hash: null,
-      reset_token_hash: null,
-      reset_expires_at: null,
-      phone: null,
-      district_id: null,
-      notification_prefs: { district_alerts: true, incident_updates: true, public_safety: true },
-      privacy_prefs: { share_approximate_only: false },
-      created_at: new Date().toISOString(),
-    });
-  }
+  syncEnvAdmin(store);
 
   saveStore(store);
   return store;

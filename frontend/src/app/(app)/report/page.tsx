@@ -754,7 +754,7 @@ export default function ReportEmergencyPage() {
       )}
 
       {/* My Submitted Reports / Track Guest Report */}
-      <section aria-labelledby="mine-h" className="space-y-3">
+      <section id="track" aria-labelledby="mine-h" className="scroll-mt-20 space-y-3">
         <h2 id="mine-h" className="flex items-center gap-2 text-lg font-bold text-ct-text">
           <ClipboardList className="h-5 w-5 text-[#0b8a99] dark:text-[#21C7D9]" />
           {user ? "My Reports & Progress" : "Track My Report"}

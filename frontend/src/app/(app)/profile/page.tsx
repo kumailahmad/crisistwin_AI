@@ -3,7 +3,9 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  ArrowRight,
   CheckCircle2,
+  ClipboardList,
   KeyRound,
   LocateFixed,
   LogIn,
@@ -32,7 +34,8 @@ import {
 import { useAuth } from "@/lib/auth/AuthContext";
 import { useAsync } from "@/lib/hooks";
 import { useCitizenLocation } from "@/lib/hooks/useCitizenLocation";
-import { auth, districts, users } from "@/lib/services";
+import { auth, districts, incidents, users } from "@/lib/services";
+import { INCIDENT_TYPES, STATUS_LABEL, type IncidentStatus } from "@/lib/types";
 import { useTheme } from "@/lib/theme/ThemeContext";
 
 export default function ProfilePage() {
@@ -41,6 +44,11 @@ export default function ProfilePage() {
   const router = useRouter();
   const toast = useToast();
   const ds = useAsync(() => districts.list(), [], "districts");
+  const myReports = useAsync(
+    () => (user ? incidents.mine().catch(() => []) : Promise.resolve([])),
+    [user?.id],
+    user ? `profile-reports-${user.id}` : undefined
+  );
   const loc = useCitizenLocation(ds.data ?? []);
 
   const [fullName, setFullName] = useState("");
@@ -292,6 +300,67 @@ export default function ProfilePage() {
 
       {user && (
         <>
+          <Card>
+            <CardHeader
+              title="My Submitted Reports"
+              subtitle="Track verification status and dispatch updates for your reports."
+              action={
+                <Link
+                  href="/report#track"
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-[#0b8a99] hover:underline dark:text-[#21C7D9]"
+                >
+                  View all <ArrowRight className="h-3.5 w-3.5" />
+                </Link>
+              }
+            />
+            <div className="p-5">
+              {myReports.loading ? (
+                <p className="text-xs text-ct-muted">Loading submitted reports…</p>
+              ) : myReports.data?.length ? (
+                <div className="divide-y divide-ct-border">
+                  {myReports.data.slice(0, 4).map((rep) => {
+                    const tone: Record<IncidentStatus, "amber" | "green" | "cyan" | "neutral" | "red"> = {
+                      pending: "amber",
+                      under_review: "cyan",
+                      verified: "green",
+                      response_assigned: "cyan",
+                      resolved: "neutral",
+                      rejected: "red",
+                    };
+                    const typeMeta = INCIDENT_TYPES.find((t) => t.value === rep.type);
+                    return (
+                      <div key={rep.id} className="flex flex-wrap items-center justify-between gap-2 py-2.5 first:pt-0 last:pb-0">
+                        <div className="min-w-0">
+                          <p className="flex items-center gap-2 text-sm font-semibold text-ct-text">
+                            <span className="font-mono text-xs text-[#0b8a99] dark:text-[#21C7D9] tabular-nums">
+                              {rep.code}
+                            </span>
+                            <span className="truncate">{typeMeta?.label ?? rep.type.replace(/_/g, " ")}</span>
+                          </p>
+                          <p className="mt-0.5 text-xs text-ct-muted">
+                            {rep.district_name ?? rep.place_text ?? `${rep.latitude.toFixed(2)}, ${rep.longitude.toFixed(2)}`} ·{" "}
+                            {new Date(rep.created_at).toLocaleDateString()}
+                          </p>
+                        </div>
+                        <Badge tone={tone[rep.status]}>{STATUS_LABEL[rep.status]}</Badge>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="flex items-center gap-2 text-xs text-ct-muted">
+                    <ClipboardList className="h-4 w-4" />
+                    No emergency reports submitted from this account yet.
+                  </p>
+                  <Link href="/report" className={buttonClasses({ size: "sm", variant: "outline" })}>
+                    Report an Emergency
+                  </Link>
+                </div>
+              )}
+            </div>
+          </Card>
+
           <Card>
             <CardHeader
               title="Account details & alert preferences"

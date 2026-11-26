@@ -4,7 +4,10 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bell,
+  Bot,
+  ClipboardCheck,
   Home,
+  Hospital,
   Info,
   LogIn,
   LogOut,
@@ -38,6 +41,17 @@ const CITIZEN_NAV = [
   { href: "/profile", label: "Account", mobileLabel: "Account", icon: UserCircle2 },
 ] as const;
 
+const DRAWER_LINKS = [
+  { href: "/", label: "Home", icon: Home },
+  { href: "/alerts", label: "Latest Public Alerts", icon: ShieldAlert },
+  { href: "/report", label: "Report Emergency", icon: Megaphone, hot: true },
+  { href: "/resources", label: "Emergency Help", icon: Hospital },
+  { href: "/assistant", label: "AI Emergency Assistant", icon: Bot },
+  { href: "/report#track", label: "Track a Report", icon: ClipboardCheck },
+  { href: "/about", label: "About & Districts", icon: Info },
+  { href: "/profile", label: "Account & Settings", icon: UserCircle2 },
+] as const;
+
 const TECHNICAL_ROUTES = ["/risk", "/simulations", "/reports", "/map"];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -52,6 +66,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const isAdminZone = path.startsWith("/admin");
   const isTechnicalDark = isAdminZone || TECHNICAL_ROUTES.some((r) => path === r || path.startsWith(r + "/"));
+  const isHome = !isAdminZone && (path === "/" || path === "/dashboard");
 
   const ds = useAsync(() => districtsApi.list().catch(() => []), [], "shell-districts");
   const loc = useCitizenLocation(ds.data ?? []);
@@ -133,11 +148,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const isNavActive = (href: string) => {
     if (href === "/") return path === "/" || path === "/dashboard";
+    if (href.includes("#")) return false;
     return path === href || path.startsWith(href + "/");
   };
 
   return (
-    <div className={cn("min-h-screen flex flex-col", isTechnicalDark && "dark ct-command-surface")}>
+    <div
+      className={cn(
+        "min-h-screen flex flex-col overflow-x-clip",
+        isHome && "lg:h-dvh lg:overflow-hidden",
+        isTechnicalDark && "dark ct-command-surface"
+      )}
+    >
       <a
         href="#main"
         className="sr-only z-[5000] rounded-lg bg-[#21C7D9] px-4 py-2 font-semibold text-[#0B1424] focus:not-sr-only focus:fixed focus:left-4 focus:top-4"
@@ -145,32 +167,35 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         Skip to content
       </a>
 
-      {/* Mobile Drawer (clean 5 items only) */}
+      {/* Right-side Slide-Over Quick Menu Drawer */}
       {open && (
         <div
-          className="fixed inset-0 z-[2000] bg-[#0B1424]/60 backdrop-blur-sm lg:hidden"
+          className="fixed inset-0 z-[2000] bg-[#0B1424]/55 backdrop-blur-sm"
           onClick={() => setOpen(false)}
         />
       )}
       <aside
+        aria-label="Quick navigation drawer"
+        aria-hidden={!open}
         className={cn(
-          "fixed inset-y-0 left-0 z-[2100] flex w-72 flex-col border-r border-ct-border bg-ct-surface transition-transform lg:hidden",
-          open ? "translate-x-0" : "-translate-x-full"
+          "fixed inset-y-0 right-0 z-[2100] flex w-80 max-w-[88vw] flex-col border-l border-ct-border bg-ct-surface shadow-2xl transition-transform duration-200",
+          open ? "translate-x-0" : "translate-x-full pointer-events-none"
         )}
       >
-        <div className="flex items-center justify-between border-b border-ct-border px-5 py-4">
-          <Logo href={isAdminZone ? "/admin" : "/"} />
+        <div className="flex items-center justify-between border-b border-ct-border px-5 py-3.5">
+          <Logo href={isAdminZone ? "/admin" : "/"} compact />
           <button
+            type="button"
             onClick={() => setOpen(false)}
             aria-label="Close menu"
-            className="grid min-h-[44px] min-w-[44px] place-items-center text-ct-muted"
+            className="grid min-h-[44px] min-w-[44px] place-items-center rounded-xl text-ct-muted transition hover:bg-ct-soft hover:text-ct-text"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        <nav className="flex-1 space-y-1.5 overflow-y-auto px-3 py-5" aria-label="Mobile drawer navigation">
-          {CITIZEN_NAV.map((item) => {
+        <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4" aria-label="Drawer navigation">
+          {DRAWER_LINKS.map((item) => {
             const Icon = item.icon;
             const active = isNavActive(item.href);
             const hot = "hot" in item && item.hot;
@@ -179,11 +204,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 key={item.href}
                 href={item.href}
                 className={cn(
-                  "flex min-h-[44px] items-center gap-3 whitespace-nowrap rounded-xl px-3.5 py-2.5 text-sm font-medium transition",
+                  "flex min-h-[44px] items-center gap-3 whitespace-nowrap rounded-xl px-3.5 py-2 text-sm font-medium transition",
                   active
-                    ? "bg-[#21C7D9]/15 font-semibold text-[#0b7280] ring-1 ring-[#21C7D9]/40 dark:text-[#21C7D9]"
+                    ? "bg-[#21C7D9]/12 font-semibold text-[#0b7280] dark:text-[#21C7D9]"
                     : hot
-                      ? "bg-[#DC454D]/10 text-[#b91c25] ring-1 ring-[#DC454D]/30 hover:bg-[#DC454D]/15 dark:text-red-200"
+                      ? "bg-[#DC454D]/10 font-semibold text-[#b91c25] hover:bg-[#DC454D]/15 dark:text-red-200"
                       : "text-ct-secondary hover:bg-ct-soft hover:text-ct-text"
                 )}
               >
@@ -192,13 +217,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </Link>
             );
           })}
-          {user?.role === "admin" && (
+
+          {user?.role === "admin" ? (
             <Link
               href="/admin"
               className="mt-3 flex min-h-[44px] items-center gap-3 rounded-xl border border-[#E9A23B]/50 bg-[#E9A23B]/15 px-3.5 py-2.5 text-sm font-semibold text-amber-900 dark:text-amber-200"
             >
               <Shield className="h-[18px] w-[18px] shrink-0" />
-              Admin Portal
+              Admin Command Portal
+            </Link>
+          ) : (
+            <Link
+              href="/staff-access"
+              className="mt-3 flex min-h-[40px] items-center gap-3 rounded-xl px-3.5 py-2 text-xs font-medium text-ct-muted hover:bg-ct-soft hover:text-ct-text"
+            >
+              <Shield className="h-4 w-4 shrink-0" />
+              Staff / Admin Sign-In
             </Link>
           )}
         </nav>
@@ -225,6 +259,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 </div>
               </Link>
               <button
+                type="button"
                 onClick={handleSignOut}
                 className="flex min-h-[40px] w-full items-center justify-center gap-2 rounded-xl border border-ct-border px-3 py-1.5 text-xs font-medium text-ct-secondary hover:border-[#DC454D]/50 hover:text-[#DC454D]"
               >
@@ -244,20 +279,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      {/* Top Navigation Bar (Compact Horizontal Citizen Bar, No Desktop Sidebar) */}
+      {/* Top Navigation Bar — Logo on Left, 5 Citizen Items Centered, Controls + Menu on Far Right */}
       <header className="sticky top-0 z-[900] border-b border-ct-border bg-ct-surface/95 backdrop-blur">
-        <div className="mx-auto flex h-16 max-w-[1400px] items-center justify-between gap-2 px-3 sm:px-5 lg:px-8">
-          <div className="flex min-w-0 items-center gap-2">
-            {!isAdminZone && (
-              <button
-                className="grid min-h-[40px] min-w-[40px] shrink-0 place-items-center rounded-xl text-ct-secondary hover:bg-ct-soft lg:hidden"
-                onClick={() => setOpen(true)}
-                aria-label="Open menu"
-              >
-                <Menu className="h-5 w-5" />
-              </button>
-            )}
-
+        <div className="mx-auto flex h-14 max-w-[1400px] items-center justify-between gap-2 px-3 sm:px-5 lg:px-8">
+          <div className="flex min-w-0 items-center">
             {isAdminZone ? (
               <Link href="/admin" className="truncate font-display text-sm font-bold text-[#EDF5FA]">
                 CRISISTWIN AI · Admin Command Center
@@ -267,7 +292,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             )}
           </div>
 
-          {/* Compact Desktop Horizontal Navigation (ONLY 5 Citizen Items) */}
+          {/* Clean Editorial Desktop Horizontal Navigation */}
           {!isAdminZone && (
             <nav className="hidden items-center gap-1 lg:flex" aria-label="Main navigation">
               {CITIZEN_NAV.map((item) => {
@@ -279,11 +304,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     key={item.href}
                     href={item.href}
                     className={cn(
-                      "inline-flex min-h-[40px] items-center gap-1.5 whitespace-nowrap rounded-xl px-3.5 py-2 text-sm font-medium transition",
+                      "relative inline-flex min-h-[40px] items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-1.5 text-sm font-medium transition",
                       active
-                        ? "bg-[#21C7D9]/15 font-semibold text-[#0b7280] ring-1 ring-[#21C7D9]/40 dark:text-[#21C7D9]"
+                        ? "font-semibold text-[#0b7280] after:absolute after:inset-x-3 after:bottom-0.5 after:h-0.5 after:rounded-full after:bg-[#21C7D9] dark:text-[#21C7D9]"
                         : hot
-                          ? "bg-[#DC454D]/10 font-semibold text-[#b91c25] ring-1 ring-[#DC454D]/30 hover:bg-[#DC454D]/15 dark:text-red-200"
+                          ? "font-semibold text-[#b91c25] hover:bg-[#DC454D]/10 dark:text-red-300"
                           : "text-ct-secondary hover:bg-ct-soft hover:text-ct-text"
                     )}
                   >
@@ -295,19 +320,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </nav>
           )}
 
-          {/* Right Utilities: Location, Theme, Notification, Account */}
-          <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
+          {/* Right Utilities: Location, Theme, Notifications, Account, and Right-Aligned Menu Button */}
+          <div className="flex shrink-0 items-center gap-1.5">
             {isAdminZone ? (
               <>
                 <Link
                   href="/"
-                  className="inline-flex min-h-[40px] shrink-0 items-center whitespace-nowrap rounded-xl border border-ct-border px-3 py-1.5 text-xs font-medium text-[#EDF5FA] hover:border-[#21C7D9]/60"
+                  className="inline-flex min-h-[38px] shrink-0 items-center whitespace-nowrap rounded-xl border border-ct-border px-3 py-1.5 text-xs font-medium text-[#EDF5FA] hover:border-[#21C7D9]/60"
                 >
                   Citizen App
                 </Link>
                 <button
+                  type="button"
                   onClick={handleSignOut}
-                  className="inline-flex min-h-[40px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-ct-border px-3 py-1.5 text-xs font-medium text-slate-300 hover:border-[#DC454D]/60 hover:text-red-300"
+                  className="inline-flex min-h-[38px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-ct-border px-3 py-1.5 text-xs font-medium text-slate-300 hover:border-[#DC454D]/60 hover:text-red-300"
                 >
                   <LogOut className="h-3.5 w-3.5" />
                   Sign out
@@ -318,7 +344,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <Link
                   href="/profile#location"
                   title="Current location setting"
-                  className="hidden min-h-[38px] max-w-[150px] items-center gap-1.5 rounded-xl border border-ct-border bg-ct-bg px-2.5 py-1 text-xs font-medium text-ct-text transition hover:border-[#21C7D9] sm:inline-flex"
+                  className="hidden min-h-[38px] max-w-[140px] items-center gap-1.5 rounded-xl border border-ct-border bg-ct-bg px-2.5 py-1 text-xs font-medium text-ct-text transition hover:border-[#21C7D9] sm:inline-flex"
                 >
                   <MapPin className="h-3.5 w-3.5 shrink-0 text-[#0b8a99] dark:text-[#21C7D9]" />
                   <span className="truncate">{locationLabel}</span>
@@ -328,7 +354,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   type="button"
                   onClick={toggleTheme}
                   aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-                  className="hidden min-h-[40px] min-w-[40px] place-items-center rounded-xl border border-ct-border bg-ct-surface text-ct-secondary transition hover:border-[#21C7D9] hover:text-ct-text sm:grid"
+                  className="hidden min-h-[38px] min-w-[38px] place-items-center rounded-xl border border-ct-border bg-ct-surface text-ct-secondary transition hover:border-[#21C7D9] hover:text-ct-text sm:grid"
                 >
                   {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
                 </button>
@@ -336,7 +362,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <Link
                   href="/notifications"
                   aria-label="Notifications"
-                  className="relative grid min-h-[40px] min-w-[40px] place-items-center rounded-xl border border-ct-border bg-ct-surface text-ct-secondary transition hover:border-[#21C7D9] hover:text-ct-text"
+                  className="relative grid min-h-[38px] min-w-[38px] place-items-center rounded-xl border border-ct-border bg-ct-surface text-ct-secondary transition hover:border-[#21C7D9] hover:text-ct-text"
                 >
                   <Bell className="h-4 w-4" />
                   {unread > 0 && (
@@ -349,7 +375,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <Link
                   href="/profile"
                   aria-label={user ? "Account" : "Account & Guest Settings"}
-                  className="inline-flex min-h-[40px] items-center gap-1.5 rounded-xl border border-ct-border bg-ct-surface px-2.5 text-xs font-semibold text-ct-secondary transition hover:border-[#21C7D9] hover:text-ct-text"
+                  className="hidden min-h-[38px] items-center gap-1.5 rounded-xl border border-ct-border bg-ct-surface px-2.5 text-xs font-semibold text-ct-secondary transition hover:border-[#21C7D9] hover:text-ct-text sm:inline-flex"
                 >
                   <UserCircle2 className="h-4 w-4 shrink-0" />
                   <span className="hidden xl:inline">{user ? user.full_name || "Account" : "Guest"}</span>
@@ -362,12 +388,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 {user?.role === "admin" && (
                   <Link
                     href="/admin"
-                    className="hidden min-h-[40px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-[#E9A23B]/50 bg-[#E9A23B]/15 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-[#E9A23B]/25 dark:text-amber-200 sm:inline-flex"
+                    className="hidden min-h-[38px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-[#E9A23B]/50 bg-[#E9A23B]/15 px-3 py-1 text-xs font-semibold text-amber-900 hover:bg-[#E9A23B]/25 dark:text-amber-200 sm:inline-flex"
                   >
                     <Shield className="h-3.5 w-3.5" />
                     Admin Portal
                   </Link>
                 )}
+
+                <button
+                  type="button"
+                  onClick={() => setOpen(true)}
+                  aria-label="Open menu"
+                  aria-expanded={open}
+                  className="grid min-h-[40px] min-w-[40px] shrink-0 place-items-center rounded-xl border border-ct-border bg-ct-surface text-ct-text transition hover:border-[#21C7D9] hover:bg-ct-soft"
+                >
+                  <Menu className="h-5 w-5" />
+                </button>
               </>
             )}
           </div>
@@ -389,15 +425,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       )}
 
-      <div className="min-w-0 flex-1 pb-20 lg:pb-8">
-        <main id="main" tabIndex={-1} className="mx-auto w-full max-w-[1320px] px-4 py-6 outline-none lg:px-8">
-          <div key={path} className="animate-fadeUp">
+      <div className={cn("min-w-0 flex-1 pb-20 lg:pb-8", isHome && "flex flex-col pb-20 lg:min-h-0 lg:pb-3")}>
+        <main
+          id="main"
+          tabIndex={-1}
+          className={cn(
+            "mx-auto w-full max-w-[1320px] px-4 py-5 outline-none lg:px-8",
+            isHome && "flex-1 lg:flex lg:min-h-0 lg:flex-col lg:py-4"
+          )}
+        >
+          <div key={path} className={cn("animate-fadeUp", isHome && "flex-1 lg:flex lg:min-h-0 lg:flex-col")}>
             {children}
           </div>
         </main>
       </div>
 
-      {/* Citizen Mobile Bottom Tab Bar — 5 main items only, <= 64px height */}
+      {/* Citizen Mobile Bottom Tab Bar — 5 main items only, 64px height */}
       {!isAdminZone && (
         <nav
           aria-label="Mobile navigation"
