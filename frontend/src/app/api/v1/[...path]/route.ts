@@ -38,6 +38,8 @@ import {
   type StoredIncident,
   type StoredUser,
 } from "@/lib/server/store";
+import { handleDepartmentRoutes } from "@/lib/server/departmentApi";
+import { runIncidentIntelligencePipeline } from "@/lib/server/routingAgent";
 import { getDbStatus, sendAdminAccountAlert } from "@/lib/server/supabaseDb";
 import { buildCsv, computeAnalytics } from "@/lib/utils/analytics";
 import type {
@@ -107,12 +109,16 @@ function err(status: number, detail: string) {
   return NextResponse.json({ detail }, { status });
 }
 
-function userOut(u: StoredUser) {
+function userOut(u: StoredUser, store?: Store) {
+  const deptName =
+    u.department_id && store ? store.departments.find((d) => d.id === u.department_id)?.name ?? null : null;
   return {
     id: u.id,
     email: u.email,
     full_name: u.full_name,
     role: u.role,
+    department_id: u.department_id ?? null,
+    department_name: deptName,
     is_active: u.is_active,
     email_verified: u.email_verified,
     phone: u.phone,
@@ -155,7 +161,8 @@ function getUser(req: NextRequest, store: Store): StoredUser | NextResponse {
       email: claims.email,
       hashed_password: "!jwt-rehydrated",
       full_name: claims.full_name ?? null,
-      role: claims.role === "admin" ? "admin" : "user",
+      role: claims.role === "admin" ? "admin" : claims.role === "department" ? "department" : "user",
+      department_id: null,
       is_active: true,
       email_verified: true,
       email_verify_token_hash: null,
@@ -249,6 +256,17 @@ function incidentOut(
       reviewed_at: i.reviewed_at,
       user_id: i.user_id,
       reporter_type: i.reporter_type ?? (i.user_id !== null ? "citizen" : "guest"),
+      workflow_status: i.workflow_status ?? "submitted",
+      ai_analysis_status: i.ai_analysis_status ?? "pending",
+      ai_recommended_category: i.ai_recommended_category ?? null,
+      ai_recommended_severity: i.ai_recommended_severity ?? null,
+      ai_confidence: i.ai_confidence ?? null,
+      ai_image_summary: i.ai_image_summary ?? null,
+      ai_reasoning: i.ai_reasoning ?? null,
+      ai_processed_at: i.ai_processed_at ?? null,
+      assigned_department_id: i.assigned_department_id ?? null,
+      assigned_department_name: i.assigned_department_name ?? null,
+      escalated: Boolean(i.escalated),
       history: i.history ?? [],
       media: i.media_blobs.map((m) => ({
         id: m.id,
@@ -326,6 +344,16 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
   const method = req.method.toUpperCase();
   const store = await getStoreAsync();
   const route = segs.join("/");
+
+  const deptHandled = await handleDepartmentRoutes({
+    req,
+    segs,
+    method,
+    store,
+    requireAdmin: () => requireAdmin(req, store),
+    requireUser: () => getUser(req, store),
+  });
+  if (deptHandled) return deptHandled;
 
   // ---- HEALTH & OPENAPI ----
   if (method === "GET" && route === "health") {
@@ -1480,8 +1508,13 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
         people_affected,
         observed_at,
         status: "pending",
+        workflow_status: store.agentConfig.enabled ? "ai_processing" : "awaiting_verification",
+        ai_analysis_status: store.agentConfig.enabled ? "processing" : "skipped",
         admin_note: null,
         assigned_team: null,
+        assigned_department_id: null,
+        assigned_department_name: null,
+        escalated: false,
         duplicate_of_id: null,
         flag_count: 0,
         flagged_by: [],
@@ -1519,7 +1552,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
         kind: "incident",
         title: `New ${inc.severity.toUpperCase()} report ${inc.code}`,
         body: `${inc.type.replace(/_/g, " ")}${districtName ? ` in ${districtName}` : ""} · ${inc.description.slice(0, 120)}`,
-        link: "/admin/incidents",
+        link: "/admin/departments?tab=monitoring",
       });
       void sendAdminAccountAlert({
         eventType: "incident_submitted",
@@ -1535,6 +1568,9 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
         },
         fallbackSupportEmail: store.settings.support_email,
       });
+      // Non-blocking AI Intelligence + Deterministic Routing execution so citizen receives Reference ID immediately
+      saveStore(store);
+      void runIncidentIntelligencePipeline(store, inc.id);
       return NextResponse.json(incidentOut(store, inc, { similar, guestCode: guestTrackingCode }), { status: 201 });
     }
   }
@@ -1960,13 +1996,62 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
   }
 
   // ---- ADMIN ----
-  if (route === "admin/users" && method === "GET") {
-    const admin = requireAdmin(req, store);
-    if (admin instanceof NextResponse) return admin;
-    const sorted = [...store.users].sort(
-      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    );
-    return NextResponse.json(sorted.map(userOut));
+  if (route === "admin/users") {
+    if (method === "GET") {
+      const admin = requireAdmin(req, store);
+      if (admin instanceof NextResponse) return admin;
+      const sorted = [...store.users].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+      return NextResponse.json(sorted.map((u) => userOut(u, store)));
+    }
+    if (method === "POST") {
+      const admin = requireAdmin(req, store);
+      if (admin instanceof NextResponse) return admin;
+      const body = await readJson<{
+        email?: string;
+        password?: string;
+        full_name?: string;
+        role?: "user" | "department" | "admin";
+        department_id?: number | null;
+      }>(req);
+      if (body instanceof NextResponse) return body;
+      const email = (body.email ?? "").trim().toLowerCase();
+      const pw = body.password ?? "";
+      if (!/^\S+@\S+\.\S+$/.test(email)) return err(422, "Invalid email address");
+      if (pw.length < 8) return err(422, "Password must be at least 8 characters");
+      if (Buffer.byteLength(pw, "utf8") > 72) return err(422, "Password must be at most 72 bytes");
+      if (store.users.some((u) => u.email === email)) return err(409, "Email is already registered");
+      const role = body.role === "admin" || body.role === "department" ? body.role : "user";
+      const deptId =
+        role === "department" && body.department_id && store.departments.some((d) => d.id === Number(body.department_id))
+          ? Number(body.department_id)
+          : null;
+      if (role === "department" && !deptId) {
+        return err(422, "Select a valid department for a department officer account.");
+      }
+      const created: StoredUser = {
+        id: store.nextId.user++,
+        email,
+        hashed_password: hashPassword(pw),
+        full_name: body.full_name?.trim().slice(0, 120) || null,
+        role,
+        department_id: deptId,
+        is_active: true,
+        email_verified: true,
+        email_verify_token_hash: null,
+        reset_token_hash: null,
+        reset_expires_at: null,
+        phone: null,
+        district_id: null,
+        notification_prefs: { district_alerts: true, incident_updates: true, public_safety: true },
+        privacy_prefs: { share_approximate_only: false },
+        created_at: new Date().toISOString(),
+      };
+      store.users.push(created);
+      addAudit(store, admin.id, "create_user", "user", created.id, { role, department_id: deptId });
+      return NextResponse.json(userOut(created, store), { status: 201 });
+    }
   }
 
   if (segs[0] === "admin" && segs[1] === "users" && segs.length === 4 && segs[3] === "reset-code" && method === "POST") {
@@ -1987,12 +2072,19 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
     const u = store.users.find((x) => x.id === Number(segs[2]));
     if (!u) return err(404, "User not found");
     if (u.id === admin.id) return err(400, "Administrators cannot change their own role or status");
-    const body = await readJson<{ role?: "user" | "admin"; is_active?: boolean }>(req);
+    const body = await readJson<{ role?: "user" | "department" | "admin"; department_id?: number | null; is_active?: boolean }>(req);
     if (body instanceof NextResponse) return body;
-    if (body.role === "user" || body.role === "admin") u.role = body.role;
+    if (body.role === "user" || body.role === "department" || body.role === "admin") u.role = body.role;
+    if ("department_id" in body) {
+      u.department_id =
+        body.department_id && store.departments.some((d) => d.id === Number(body.department_id))
+          ? Number(body.department_id)
+          : null;
+    }
+    if (u.role !== "department") u.department_id = null;
     if (typeof body.is_active === "boolean") u.is_active = body.is_active;
     addAudit(store, admin.id, "update", "user", u.id, body);
-    return NextResponse.json(userOut(u));
+    return NextResponse.json(userOut(u, store));
   }
 
   if (route === "admin/audit-logs" && method === "GET") {

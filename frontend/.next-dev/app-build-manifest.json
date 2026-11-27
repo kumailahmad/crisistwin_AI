@@ -61,10 +61,10 @@
       "static/chunks/main-app.js",
       "static/chunks/app/staff-access/page.js"
     ],
-    "/login/page": [
+    "/(app)/department/page": [
       "static/chunks/webpack.js",
       "static/chunks/main-app.js",
-      "static/chunks/app/login/page.js"
+      "static/chunks/app/(app)/department/page.js"
     ]
   }
 }

@@ -4,21 +4,34 @@ import path from "path";
 import { hashPassword } from "./auth";
 import { getDbStatus, initAndLoadPostgresStore, saveStoreToDatabase } from "./supabaseDb";
 import type {
+  AgentConfiguration,
+  AgentExecutionLog,
   AiConfig,
   AiLogEntry,
   AlertItem,
   AppNotification,
   AuditLog,
   Dataset,
+  Department,
+  DepartmentResponseRecord,
   District,
+  EscalationLog,
+  EscalationRule,
   Incident,
+  IncidentAssignment,
+  IncidentSeverity,
+  IncidentType,
+  NotificationIntegration,
+  NotificationLog,
   NotificationPrefs,
   PlatformSettings,
   PrivacyPrefs,
   Resource,
   RiskAssessment,
   Role,
+  RoutingRule,
   Simulation,
+  WorkflowStatus,
 } from "@/lib/types";
 
 export interface StoredUser {
@@ -27,6 +40,7 @@ export interface StoredUser {
   hashed_password: string;
   full_name: string | null;
   role: Role;
+  department_id?: number | null;
   is_active: boolean;
   email_verified: boolean;
   email_verify_token_hash: string | null;
@@ -64,6 +78,23 @@ export interface StoredIncident extends Incident {
   reviewed_by: number | null;
   flagged_by: number[];
   media_blobs: StoredMedia[];
+  workflow_status?: WorkflowStatus;
+  ai_analysis_status?: "pending" | "processing" | "completed" | "failed" | "skipped";
+  ai_recommended_category?: IncidentType | null;
+  ai_recommended_severity?: IncidentSeverity | null;
+  ai_confidence?: number | null;
+  ai_image_summary?: string | null;
+  ai_reasoning?: string | null;
+  ai_processed_at?: string | null;
+  assigned_department_id?: number | null;
+  assigned_department_name?: string | null;
+  escalated?: boolean;
+  processing_lock_at?: number | null;
+}
+
+export interface StoredNotificationIntegration extends NotificationIntegration {
+  encrypted_api_key?: string | null;
+  encrypted_auth_token?: string | null;
 }
 
 export interface StoredRiskAssessment extends RiskAssessment {
@@ -89,6 +120,16 @@ export interface Store {
   aiConfig: AiConfig;
   settings: PlatformSettings;
   auditLogs: AuditLog[];
+  departments: Department[];
+  routingRules: RoutingRule[];
+  incidentAssignments: IncidentAssignment[];
+  departmentResponses: DepartmentResponseRecord[];
+  notificationIntegrations: StoredNotificationIntegration[];
+  notificationLogs: NotificationLog[];
+  agentConfig: AgentConfiguration;
+  escalationRules: EscalationRule[];
+  escalationLogs: EscalationLog[];
+  agentExecutionLogs: AgentExecutionLog[];
   nextId: {
     user: number;
     district: number;
@@ -102,6 +143,16 @@ export interface Store {
     notification: number;
     aiLog: number;
     audit: number;
+    department: number;
+    contact: number;
+    routingRule: number;
+    assignment: number;
+    departmentResponse: number;
+    integration: number;
+    notificationLog: number;
+    escalationRule: number;
+    escalationLog: number;
+    agentExecutionLog: number;
   };
 }
 
@@ -138,6 +189,23 @@ export function getContacts(): ContactsJson {
     };
   }
   return contactsCache;
+}
+
+export function defaultAgentConfig(): AgentConfiguration {
+  return {
+    id: 1,
+    enabled: true,
+    auto_assign: true,
+    require_human_verification: false,
+    analyze_images_with_vision: true,
+    classification_model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
+    vision_model: process.env.GROQ_VISION_MODEL || "meta-llama/llama-4-scout-17b-16e-instruct",
+    confidence_threshold: 0.55,
+    max_notification_retries: 2,
+    notify_admin_on_unassigned: true,
+    notify_admin_on_ai_failure: true,
+    updated_at: new Date().toISOString(),
+  };
 }
 
 export function defaultAiConfig(): AiConfig {
@@ -250,9 +318,36 @@ function syncEnvAdmin(store: Store): void {
   });
 }
 
+function ensureStoreExtensions(s: Store): void {
+  if (!Array.isArray(s.departments)) s.departments = [];
+  if (!Array.isArray(s.routingRules)) s.routingRules = [];
+  if (!Array.isArray(s.incidentAssignments)) s.incidentAssignments = [];
+  if (!Array.isArray(s.departmentResponses)) s.departmentResponses = [];
+  if (!Array.isArray(s.notificationIntegrations)) s.notificationIntegrations = [];
+  if (!Array.isArray(s.notificationLogs)) s.notificationLogs = [];
+  if (!s.agentConfig) s.agentConfig = defaultAgentConfig();
+  if (!Array.isArray(s.escalationRules)) s.escalationRules = [];
+  if (!Array.isArray(s.escalationLogs)) s.escalationLogs = [];
+  if (!Array.isArray(s.agentExecutionLogs)) s.agentExecutionLogs = [];
+  s.nextId = {
+    ...s.nextId,
+    department: s.nextId?.department ?? 1,
+    contact: s.nextId?.contact ?? 1,
+    routingRule: s.nextId?.routingRule ?? 1,
+    assignment: s.nextId?.assignment ?? 1,
+    departmentResponse: s.nextId?.departmentResponse ?? 1,
+    integration: s.nextId?.integration ?? 1,
+    notificationLog: s.nextId?.notificationLog ?? 1,
+    escalationRule: s.nextId?.escalationRule ?? 1,
+    escalationLog: s.nextId?.escalationLog ?? 1,
+    agentExecutionLog: s.nextId?.agentExecutionLog ?? 1,
+  };
+}
+
 function createInitialStore(seededFromDb?: Store | null): Store {
   const persisted = seededFromDb ?? loadPersistedStore();
   if (persisted) {
+    ensureStoreExtensions(persisted);
     // Re-sync environment-derived provider/SMTP flags and env admin credentials without wiping user data
     const freshAi = defaultAiConfig();
     const dbStatus = getDbStatus();
@@ -293,6 +388,16 @@ function createInitialStore(seededFromDb?: Store | null): Store {
       updated_at: new Date().toISOString(),
     },
     auditLogs: [],
+    departments: [],
+    routingRules: [],
+    incidentAssignments: [],
+    departmentResponses: [],
+    notificationIntegrations: [],
+    notificationLogs: [],
+    agentConfig: defaultAgentConfig(),
+    escalationRules: [],
+    escalationLogs: [],
+    agentExecutionLogs: [],
     nextId: {
       user: 1,
       district: 1,
@@ -306,6 +411,16 @@ function createInitialStore(seededFromDb?: Store | null): Store {
       notification: 1,
       aiLog: 1,
       audit: 1,
+      department: 1,
+      contact: 1,
+      routingRule: 1,
+      assignment: 1,
+      departmentResponse: 1,
+      integration: 1,
+      notificationLog: 1,
+      escalationRule: 1,
+      escalationLog: 1,
+      agentExecutionLog: 1,
     },
   };
 

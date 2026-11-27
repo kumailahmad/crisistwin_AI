@@ -5,6 +5,7 @@ import {
   Activity,
   BarChart3,
   Bot,
+  Building2,
   CloudRain,
   Database,
   FileClock,
@@ -22,6 +23,7 @@ import { cn } from "@/lib/cn";
 const TABS = [
   { href: "/admin", label: "Overview", icon: LayoutGrid },
   { href: "/admin/incidents", label: "Incidents", icon: Megaphone },
+  { href: "/admin/departments", label: "Department & Agent Manager", icon: Building2 },
   { href: "/admin/alerts", label: "Alerts", icon: ShieldAlert },
   { href: "/admin/resources", label: "Resources", icon: Siren },
   { href: "/admin/risk", label: "Risk Assessment", icon: Activity },

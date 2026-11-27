@@ -1,4 +1,4 @@
-export type Role = "user" | "admin";
+export type Role = "user" | "department" | "admin";
 export type InputStatus = "measured" | "estimate" | "assumption";
 export type RiskCategory = "Low" | "Moderate" | "High" | "Severe" | "Insufficient data";
 
@@ -17,6 +17,8 @@ export interface User {
   email: string;
   full_name: string | null;
   role: Role;
+  department_id?: number | null;
+  department_name?: string | null;
   is_active: boolean;
   email_verified?: boolean;
   phone?: string | null;
@@ -344,6 +346,17 @@ export interface Incident {
   media?: IncidentMediaMeta[];
   history?: IncidentHistoryEntry[];
   similar_nearby?: number;
+  workflow_status?: WorkflowStatus;
+  ai_analysis_status?: "pending" | "processing" | "completed" | "failed" | "skipped";
+  ai_recommended_category?: IncidentType | null;
+  ai_recommended_severity?: IncidentSeverity | null;
+  ai_confidence?: number | null;
+  ai_image_summary?: string | null;
+  ai_reasoning?: string | null;
+  ai_processed_at?: string | null;
+  assigned_department_id?: number | null;
+  assigned_department_name?: string | null;
+  escalated?: boolean;
 }
 
 export interface TrackedIncident {
@@ -403,3 +416,233 @@ export interface AnalyticsReport {
   risk_by_category: { name: string; value: number }[];
   alerts_summary: { total: number; published: number; expired: number; draft: number };
 }
+
+// ---- DEPARTMENT ROUTING AGENT & NO-CODE MANAGER TYPES ----
+
+export type WorkflowStatus =
+  | "submitted"
+  | "ai_processing"
+  | "awaiting_verification"
+  | "assigned"
+  | "notified"
+  | "accepted"
+  | "in_progress"
+  | "resolved"
+  | "rejected"
+  | "unassigned";
+
+export type NotificationChannelType = "email" | "webhook" | "sms" | "whatsapp" | "push";
+
+export interface DepartmentContact {
+  id: number;
+  department_id: number;
+  name: string;
+  role_title: string | null;
+  email: string | null;
+  phone: string | null;
+  channel_preference: NotificationChannelType;
+  is_primary: boolean;
+}
+
+export interface Department {
+  id: number;
+  name: string;
+  description: string | null;
+  department_type: string;
+  assigned_district_ids: number[];
+  supported_categories: IncidentType[];
+  primary_contact_name: string | null;
+  contact_email: string | null;
+  contact_phone: string | null;
+  notification_channel: NotificationChannelType;
+  webhook_url: string | null;
+  backup_department_id: number | null;
+  priority_weight: number;
+  is_active: boolean;
+  contacts: DepartmentContact[];
+  incident_count?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RoutingRule {
+  id: number;
+  name: string;
+  description: string | null;
+  enabled: boolean;
+  is_fallback: boolean;
+  priority_order: number;
+  incident_categories: IncidentType[];
+  district_ids: number[];
+  severities: IncidentSeverity[];
+  min_people_affected: number | null;
+  require_photos: boolean;
+  keywords: string | null;
+  target_department_id: number;
+  backup_department_id: number | null;
+  set_priority: IncidentSeverity | null;
+  send_notification: boolean;
+  escalation_minutes: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IncidentAssignment {
+  id: number;
+  incident_id: number;
+  incident_code: string;
+  incident_type: IncidentType;
+  district_id: number | null;
+  district_name: string | null;
+  department_id: number;
+  department_name: string;
+  backup_department_id: number | null;
+  routing_rule_id: number | null;
+  routing_rule_name: string | null;
+  status: WorkflowStatus;
+  priority: IncidentSeverity;
+  assigned_personnel: string | null;
+  escalation_minutes: number | null;
+  escalated: boolean;
+  escalation_level: number;
+  last_escalated_at: string | null;
+  assigned_at: string;
+  notified_at: string | null;
+  acknowledged_at: string | null;
+  resolved_at: string | null;
+  updated_at: string;
+}
+
+export interface DepartmentResponseRecord {
+  id: number;
+  assignment_id: number;
+  incident_id: number;
+  department_id: number;
+  user_id: number;
+  user_name: string;
+  action: "accepted" | "rejected" | "request_info" | "status_update" | "assigned_personnel" | "note" | "resolved";
+  status_after: WorkflowStatus;
+  assigned_personnel: string | null;
+  note: string | null;
+  created_at: string;
+}
+
+export interface NotificationIntegration {
+  id: number;
+  name: string;
+  channel: NotificationChannelType;
+  provider_name: string;
+  enabled: boolean;
+  connection_status: "unverified" | "verified" | "error";
+  last_verified_at: string | null;
+  last_error: string | null;
+  endpoint_url: string | null;
+  sender_identity: string | null;
+  default_recipients: string[];
+  event_triggers: string[];
+  department_ids: number[];
+  has_api_key: boolean;
+  api_key_hint: string | null;
+  has_auth_token: boolean;
+  auth_token_hint: string | null;
+  account_sid: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NotificationLog {
+  id: number;
+  incident_id: number | null;
+  incident_code: string | null;
+  assignment_id: number | null;
+  department_id: number | null;
+  department_name: string | null;
+  integration_id: number | null;
+  channel: NotificationChannelType;
+  recipient: string;
+  event_type: string;
+  status: "sent" | "failed" | "retrying" | "skipped";
+  attempt_count: number;
+  dedupe_key: string;
+  provider_response: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentConfiguration {
+  id: number;
+  enabled: boolean;
+  auto_assign: boolean;
+  require_human_verification: boolean;
+  analyze_images_with_vision: boolean;
+  classification_model: string;
+  vision_model: string;
+  confidence_threshold: number;
+  max_notification_retries: number;
+  notify_admin_on_unassigned: boolean;
+  notify_admin_on_ai_failure: boolean;
+  updated_at: string;
+}
+
+export interface EscalationRule {
+  id: number;
+  name: string;
+  enabled: boolean;
+  severity: IncidentSeverity;
+  department_id: number | null;
+  timeout_minutes: number;
+  notify_admins: boolean;
+  notify_backup_department: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EscalationLog {
+  id: number;
+  rule_id: number | null;
+  rule_name: string | null;
+  assignment_id: number;
+  incident_id: number;
+  incident_code: string;
+  department_id: number;
+  department_name: string;
+  backup_department_id: number | null;
+  backup_department_name: string | null;
+  reason: string;
+  created_at: string;
+}
+
+export interface AgentExecutionLog {
+  id: number;
+  incident_id: number;
+  incident_code: string;
+  idempotency_key: string;
+  status: "completed" | "failed" | "skipped" | "unassigned";
+  provider: string | null;
+  model: string | null;
+  recommended_category: IncidentType | null;
+  recommended_severity: IncidentSeverity | null;
+  confidence: number | null;
+  image_summary: string | null;
+  matched_rule_id: number | null;
+  matched_rule_name: string | null;
+  assigned_department_id: number | null;
+  assigned_department_name: string | null;
+  duration_ms: number;
+  error_message: string | null;
+  created_at: string;
+}
+
+export interface DepartmentAnalytics {
+  total_reports: number;
+  auto_assigned_reports: number;
+  unassigned_reports: number;
+  pending_acknowledgements: number;
+  active_escalations: number;
+  resolved_incidents: number;
+  notification_failures: number;
+  ai_classification_failures: number;
+  by_department: { department_id: number; department_name: string; total: number; pending: number; resolved: number; escalated: number }[];
+}
+

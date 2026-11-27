@@ -2,7 +2,7 @@
   "/api/v1/[...path]/route": "app/api/v1/[...path]/route.js",
   "/page": "app/page.js",
   "/offline/page": "app/offline/page.js",
-  "/login/page": "app/login/page.js",
   "/(app)/emergency/page": "app/(app)/emergency/page.js",
-  "/staff-access/page": "app/staff-access/page.js"
+  "/staff-access/page": "app/staff-access/page.js",
+  "/(app)/department/page": "app/(app)/department/page.js"
 }

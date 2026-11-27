@@ -47,7 +47,9 @@ export default function StaffAccess() {
   const submitting = useRef(false);
 
   useEffect(() => {
-    if (user?.role === "admin" && !submitting.current) router.replace("/admin");
+    if (!user || submitting.current) return;
+    if (user.role === "admin") router.replace("/admin");
+    else if (user.role === "department") router.replace("/department");
   }, [user, router]);
 
   const checkStatus = useCallback(async () => {
@@ -106,15 +108,20 @@ export default function StaffAccess() {
       }
 
       const me = await login(email.trim(), password);
-      if (me.role !== "admin") {
-        await logout();
-        submitting.current = false;
-        setErr(
-          "This account is registered as a Citizen, not an Administrator. Use Citizen Sign-In on the home page or sign in with your Administrator account."
-        );
+      if (me.role === "admin") {
+        router.replace("/admin");
         return;
       }
-      router.replace("/admin");
+      if (me.role === "department") {
+        router.replace("/department");
+        return;
+      }
+      await logout();
+      submitting.current = false;
+      setErr(
+        "This account is registered as a Citizen. Use Citizen Sign-In on the home page or sign in with a Staff/Department account."
+      );
+      return;
     } catch (e) {
       submitting.current = false;
       const m = (e as Error).message;
@@ -161,10 +168,10 @@ export default function StaffAccess() {
               </h1>
               <p className="mt-1 text-center text-xs text-slate-400">
                 {resetMode
-                  ? "Enter your administrator email and one-time reset code."
+                  ? "Enter your staff email and one-time reset code."
                   : setupMode
                     ? "No administrator exists yet. Create the first Command Center administrator."
-                    : "Authorised administrators only. Activity is logged."}
+                    : "Authorised administrators & department officers. Activity is logged."}
               </p>
 
               {setupMode && !resetMode && (

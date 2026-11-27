@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bell,
   Bot,
+  Building2,
   ClipboardCheck,
   Home,
   Hospital,
@@ -65,8 +66,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const signingOut = useRef(false);
 
   const isAdminZone = path.startsWith("/admin");
-  const isTechnicalDark = isAdminZone || TECHNICAL_ROUTES.some((r) => path === r || path.startsWith(r + "/"));
-  const isHome = !isAdminZone && (path === "/" || path === "/dashboard");
+  const isDepartmentZone = path.startsWith("/department");
+  const isTechnicalDark =
+    isAdminZone || isDepartmentZone || TECHNICAL_ROUTES.some((r) => path === r || path.startsWith(r + "/"));
+  const isHome = !isAdminZone && !isDepartmentZone && (path === "/" || path === "/dashboard");
 
   const ds = useAsync(() => districtsApi.list().catch(() => []), [], "shell-districts");
   const loc = useCitizenLocation(ds.data ?? []);
@@ -86,11 +89,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     if (isAdminZone) {
       if (!user) {
         router.replace("/staff-access");
+      } else if (user.role === "department") {
+        router.replace("/department");
       } else if (user.role !== "admin") {
         router.replace("/");
       }
+    } else if (isDepartmentZone) {
+      if (!user) {
+        router.replace("/staff-access");
+      } else if (user.role !== "department" && user.role !== "admin") {
+        router.replace("/");
+      }
     }
-  }, [loading, user, isAdminZone, router]);
+  }, [loading, user, isAdminZone, isDepartmentZone, router]);
 
   useEffect(() => setOpen(false), [path]);
 
@@ -124,7 +135,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     };
   }, [user, path]);
 
-  if (loading && isAdminZone) {
+  if (loading && (isAdminZone || isDepartmentZone)) {
     return (
       <div className="dark ct-command-surface grid min-h-screen place-items-center bg-[#0B1424]">
         <Skeleton className="h-10 w-48" />
@@ -133,6 +144,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   if (isAdminZone && (!user || user.role !== "admin")) {
+    return (
+      <div className="dark ct-command-surface grid min-h-screen place-items-center bg-[#0B1424]">
+        <Skeleton className="h-10 w-48" />
+      </div>
+    );
+  }
+
+  if (isDepartmentZone && (!user || (user.role !== "department" && user.role !== "admin"))) {
     return (
       <div className="dark ct-command-surface grid min-h-screen place-items-center bg-[#0B1424]">
         <Skeleton className="h-10 w-48" />
@@ -219,12 +238,29 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           })}
 
           {user?.role === "admin" ? (
+            <div className="mt-3 space-y-1.5">
+              <Link
+                href="/admin"
+                className="flex min-h-[44px] items-center gap-3 rounded-xl border border-[#E9A23B]/50 bg-[#E9A23B]/15 px-3.5 py-2.5 text-sm font-semibold text-amber-900 dark:text-amber-200"
+              >
+                <Shield className="h-[18px] w-[18px] shrink-0" />
+                Admin Command Portal
+              </Link>
+              <Link
+                href="/department"
+                className="flex min-h-[44px] items-center gap-3 rounded-xl border border-[#21C7D9]/40 bg-[#21C7D9]/10 px-3.5 py-2.5 text-sm font-semibold text-[#0b7280] dark:text-[#21C7D9]"
+              >
+                <Building2 className="h-[18px] w-[18px] shrink-0" />
+                Department Portal
+              </Link>
+            </div>
+          ) : user?.role === "department" ? (
             <Link
-              href="/admin"
-              className="mt-3 flex min-h-[44px] items-center gap-3 rounded-xl border border-[#E9A23B]/50 bg-[#E9A23B]/15 px-3.5 py-2.5 text-sm font-semibold text-amber-900 dark:text-amber-200"
+              href="/department"
+              className="mt-3 flex min-h-[44px] items-center gap-3 rounded-xl border border-[#21C7D9]/40 bg-[#21C7D9]/10 px-3.5 py-2.5 text-sm font-semibold text-[#0b7280] dark:text-[#21C7D9]"
             >
-              <Shield className="h-[18px] w-[18px] shrink-0" />
-              Admin Command Portal
+              <Building2 className="h-[18px] w-[18px] shrink-0" />
+              Department Response Portal
             </Link>
           ) : (
             <Link
@@ -232,7 +268,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               className="mt-3 flex min-h-[40px] items-center gap-3 rounded-xl px-3.5 py-2 text-xs font-medium text-ct-muted hover:bg-ct-soft hover:text-ct-text"
             >
               <Shield className="h-4 w-4 shrink-0" />
-              Staff / Admin Sign-In
+              Staff / Department Sign-In
             </Link>
           )}
         </nav>
@@ -287,13 +323,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <Link href="/admin" className="truncate font-display text-sm font-bold text-[#EDF5FA]">
                 CRISISTWIN AI · Admin Command Center
               </Link>
+            ) : isDepartmentZone ? (
+              <Link href="/department" className="truncate font-display text-sm font-bold text-[#EDF5FA]">
+                CRISISTWIN AI · Department Portal
+              </Link>
             ) : (
               <Logo href="/" compact />
             )}
           </div>
 
           {/* Clean Editorial Desktop Horizontal Navigation */}
-          {!isAdminZone && (
+          {!isAdminZone && !isDepartmentZone && (
             <nav className="hidden items-center gap-1 lg:flex" aria-label="Main navigation">
               {CITIZEN_NAV.map((item) => {
                 const Icon = item.icon;
@@ -322,8 +362,24 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
           {/* Right Utilities: Location, Theme, Notifications, Account, and Right-Aligned Menu Button */}
           <div className="flex shrink-0 items-center gap-1.5">
-            {isAdminZone ? (
+            {isAdminZone || isDepartmentZone ? (
               <>
+                {user?.role === "admin" && isDepartmentZone && (
+                  <Link
+                    href="/admin"
+                    className="inline-flex min-h-[38px] shrink-0 items-center whitespace-nowrap rounded-xl border border-[#E9A23B]/50 bg-[#E9A23B]/15 px-3 py-1.5 text-xs font-medium text-amber-200 hover:bg-[#E9A23B]/25"
+                  >
+                    Admin Center
+                  </Link>
+                )}
+                {user?.role === "admin" && isAdminZone && (
+                  <Link
+                    href="/department"
+                    className="inline-flex min-h-[38px] shrink-0 items-center whitespace-nowrap rounded-xl border border-[#21C7D9]/40 bg-[#21C7D9]/10 px-3 py-1.5 text-xs font-medium text-[#21C7D9] hover:bg-[#21C7D9]/20"
+                  >
+                    Dept Portal
+                  </Link>
+                )}
                 <Link
                   href="/"
                   className="inline-flex min-h-[38px] shrink-0 items-center whitespace-nowrap rounded-xl border border-ct-border px-3 py-1.5 text-xs font-medium text-[#EDF5FA] hover:border-[#21C7D9]/60"
@@ -394,6 +450,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     Admin Portal
                   </Link>
                 )}
+                {user?.role === "department" && (
+                  <Link
+                    href="/department"
+                    className="hidden min-h-[38px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl border border-[#21C7D9]/45 bg-[#21C7D9]/15 px-3 py-1 text-xs font-semibold text-[#0b7280] hover:bg-[#21C7D9]/25 dark:text-[#21C7D9] sm:inline-flex"
+                  >
+                    <Building2 className="h-3.5 w-3.5" />
+                    Dept Portal
+                  </Link>
+                )}
 
                 <button
                   type="button"
@@ -441,7 +506,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       {/* Citizen Mobile Bottom Tab Bar — 5 main items only, 64px height */}
-      {!isAdminZone && (
+      {!isAdminZone && !isDepartmentZone && (
         <nav
           aria-label="Mobile navigation"
           className="no-print pb-safe fixed bottom-0 left-0 right-0 z-[1400] grid h-16 grid-cols-5 border-t border-ct-border bg-ct-surface/95 backdrop-blur-md lg:hidden"

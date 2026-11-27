@@ -19,9 +19,22 @@ import {
   redactDbError,
   validateHttpsExternalUrl,
 } from "../server/supabaseDb";
+import { decryptSecret, encryptSecret, maskSecretHint } from "../server/cryptoSecrets";
+import { evaluateRoutingRules, findEscalationCandidates } from "../server/routingEngine";
 import { buildCsv, compareSimulations, computeAnalytics, csvCell } from "../utils/analytics";
 import { createOfflineDraft, parseDrafts } from "../utils/offlineDrafts";
-import { INCIDENT_TYPES, type AlertItem, type Incident, type Resource, type RiskAssessment, type Simulation } from "../types";
+import {
+  INCIDENT_TYPES,
+  type AlertItem,
+  type Department,
+  type EscalationRule,
+  type Incident,
+  type IncidentAssignment,
+  type Resource,
+  type RiskAssessment,
+  type RoutingRule,
+  type Simulation,
+} from "../types";
 
 test("riskEngine excludes missing values rather than treating them as zero", () => {
   const res = assess({ rainfall_mm_24h: 120, elevation_m: 150, flood_history_index: 0.7 }, { rainfall_mm_24h: "measured" });
@@ -208,4 +221,236 @@ test("validateHttpsExternalUrl enforces HTTPS and rejects private or metadata ho
   assert.equal(validateHttpsExternalUrl("https://10.0.0.5/hook"), null);
   assert.equal(validateHttpsExternalUrl("https://192.168.1.20/hook"), null);
 });
+
+test("cryptoSecrets encrypts with AES-256-GCM, round-trips cleanly, and masks hints", () => {
+  const cipher = encryptSecret("whsec_live_9876543210");
+  assert.ok(cipher.startsWith("enc:v1:"));
+  assert.ok(!cipher.includes("9876543210"));
+  assert.equal(decryptSecret(cipher), "whsec_live_9876543210");
+  assert.equal(maskSecretHint(cipher), "••••3210");
+  assert.equal(encryptSecret("   "), "");
+  assert.equal(decryptSecret("enc:v1:bad"), "");
+});
+
+test("evaluateRoutingRules prioritizes specificity over fallback, respects priority order, and preserves unassigned", () => {
+  const now = "2026-11-27T00:00:00Z";
+  const depts: Department[] = [
+    {
+      id: 1,
+      name: "Agency Alpha",
+      description: null,
+      department_type: "fire_rescue",
+      assigned_district_ids: [1],
+      supported_categories: ["fire"],
+      primary_contact_name: null,
+      contact_email: null,
+      contact_phone: null,
+      notification_channel: "email",
+      webhook_url: null,
+      backup_department_id: 2,
+      priority_weight: 20,
+      is_active: true,
+      contacts: [],
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: 2,
+      name: "Agency Beta",
+      description: null,
+      department_type: "disaster_management",
+      assigned_district_ids: [],
+      supported_categories: ["flood", "fire"],
+      primary_contact_name: null,
+      contact_email: null,
+      contact_phone: null,
+      notification_channel: "webhook",
+      webhook_url: null,
+      backup_department_id: null,
+      priority_weight: 10,
+      is_active: true,
+      contacts: [],
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: 3,
+      name: "Disabled Agency",
+      description: null,
+      department_type: "other",
+      assigned_district_ids: [],
+      supported_categories: [],
+      primary_contact_name: null,
+      contact_email: null,
+      contact_phone: null,
+      notification_channel: "email",
+      webhook_url: null,
+      backup_department_id: null,
+      priority_weight: 99,
+      is_active: false,
+      contacts: [],
+      created_at: now,
+      updated_at: now,
+    },
+  ];
+
+  const rules: RoutingRule[] = [
+    {
+      id: 10,
+      name: "Fallback Rule",
+      description: null,
+      enabled: true,
+      is_fallback: true,
+      priority_order: 1,
+      incident_categories: [],
+      district_ids: [],
+      severities: [],
+      min_people_affected: null,
+      require_photos: false,
+      keywords: null,
+      target_department_id: 2,
+      backup_department_id: null,
+      set_priority: null,
+      send_notification: true,
+      escalation_minutes: null,
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: 11,
+      name: "Specific Fire District 1",
+      description: null,
+      enabled: true,
+      is_fallback: false,
+      priority_order: 2,
+      incident_categories: ["fire"],
+      district_ids: [1],
+      severities: [],
+      min_people_affected: null,
+      require_photos: false,
+      keywords: null,
+      target_department_id: 1,
+      backup_department_id: null,
+      set_priority: "critical",
+      send_notification: true,
+      escalation_minutes: 10,
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: 12,
+      name: "Disabled Agency Rule",
+      description: null,
+      enabled: true,
+      is_fallback: false,
+      priority_order: 1,
+      incident_categories: ["fire"],
+      district_ids: [1],
+      severities: ["high"],
+      min_people_affected: null,
+      require_photos: false,
+      keywords: null,
+      target_department_id: 3,
+      backup_department_id: null,
+      set_priority: null,
+      send_notification: true,
+      escalation_minutes: null,
+      created_at: now,
+      updated_at: now,
+    },
+  ];
+
+  // Specific active rule beats fallback AND disabled department's rule AND enforces min severity upgrade
+  const decision = evaluateRoutingRules(
+    { category: "fire", district_id: 1, severity: "high", people_affected: null, photo_count: 0, description: "Warehouse fire" },
+    rules,
+    depts
+  );
+  assert.equal(decision.matched, true);
+  assert.equal(decision.department?.id, 1);
+  assert.equal(decision.backup_department?.id, 2);
+  assert.equal(decision.effective_priority, "critical");
+  assert.equal(decision.escalation_minutes, 10);
+
+  // Unmatched specific conditions fall back only to enabled fallback
+  const fallbackDecision = evaluateRoutingRules(
+    { category: "flood", district_id: 9, severity: "low", people_affected: null, photo_count: 0, description: "Minor water" },
+    rules,
+    depts
+  );
+  assert.equal(fallbackDecision.matched, true);
+  assert.equal(fallbackDecision.rule?.id, 10);
+  assert.equal(fallbackDecision.department?.id, 2);
+
+  // When no rules exist, returns matched: false cleanly (no invented department)
+  const none = evaluateRoutingRules(
+    { category: "flood", district_id: 9, severity: "low", people_affected: null, photo_count: 0, description: "Minor water" },
+    [],
+    depts
+  );
+  assert.equal(none.matched, false);
+  assert.equal(none.department, null);
+});
+
+test("findEscalationCandidates flags overdue unacknowledged assignments and ignores acknowledged ones", () => {
+  const nowMs = Date.parse("2026-11-27T12:00:00Z");
+  const baseAssignment: IncidentAssignment = {
+    id: 1,
+    incident_id: 100,
+    incident_code: "CT-100",
+    incident_type: "flood",
+    district_id: 1,
+    district_name: "Quetta",
+    department_id: 1,
+    department_name: "Agency Alpha",
+    backup_department_id: 2,
+    routing_rule_id: 11,
+    routing_rule_name: "Rule",
+    status: "notified",
+    priority: "critical",
+    assigned_personnel: null,
+    escalation_minutes: null,
+    escalated: false,
+    escalation_level: 0,
+    last_escalated_at: null,
+    assigned_at: "2026-11-27T11:30:00Z", // 30 mins ago
+    notified_at: "2026-11-27T11:30:05Z",
+    acknowledged_at: null,
+    resolved_at: null,
+    updated_at: "2026-11-27T11:30:05Z",
+  };
+
+  const rules: EscalationRule[] = [
+    {
+      id: 1,
+      name: "Critical SLA 15m",
+      enabled: true,
+      severity: "critical",
+      department_id: null,
+      timeout_minutes: 15,
+      notify_admins: true,
+      notify_backup_department: true,
+      created_at: "2026-11-27T00:00:00Z",
+      updated_at: "2026-11-27T00:00:00Z",
+    },
+  ];
+
+  const overdue = findEscalationCandidates([baseAssignment], rules, nowMs);
+  assert.equal(overdue.length, 1);
+  assert.equal(overdue[0].elapsedMinutes, 30);
+
+  // Accepted/acknowledged assignments must not escalate
+  const acknowledged: IncidentAssignment = { ...baseAssignment, status: "accepted", acknowledged_at: "2026-11-27T11:35:00Z" };
+  assert.equal(findEscalationCandidates([acknowledged], rules, nowMs).length, 0);
+
+  // Recently escalated assignment throttles repeat triggers until another timeout elapses
+  const recentlyEscalated: IncidentAssignment = {
+    ...baseAssignment,
+    escalated: true,
+    escalation_level: 1,
+    last_escalated_at: "2026-11-27T11:55:00Z",
+  };
+  assert.equal(findEscalationCandidates([recentlyEscalated], rules, nowMs).length, 0);
+});
+
 

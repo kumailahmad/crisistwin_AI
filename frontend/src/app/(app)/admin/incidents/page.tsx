@@ -154,9 +154,20 @@ export default function AdminIncidents() {
               <Badge>{t(sel.type)?.label}</Badge>
               <Badge>{SEVERITY[sel.severity].label} (reporter)</Badge>
               {sel.district_name && <Badge tone="cyan">{sel.district_name}</Badge>}
-              {sel.assigned_team && <Badge tone="cyan">Team: {sel.assigned_team}</Badge>}
-              {!!sel.flag_count && <Badge tone="amber">{sel.flag_count} citizen flag(s)</Badge>}
-            </div>
+                {sel.assigned_team && <Badge tone="cyan">Team: {sel.assigned_team}</Badge>}
+                {sel.assigned_department_name && <Badge tone="blue">Dept: {sel.assigned_department_name}</Badge>}
+                {sel.ai_recommended_category && (
+                  <Badge tone="neutral">
+                    AI: {sel.ai_recommended_category} ({sel.ai_recommended_severity})
+                  </Badge>
+                )}
+                {!!sel.flag_count && <Badge tone="amber">{sel.flag_count} citizen flag(s)</Badge>}
+              </div>
+              {sel.ai_image_summary && (
+                <p className="rounded-lg border border-cyan-500/25 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-100">
+                  AI Vision: {sel.ai_image_summary}
+                </p>
+              )}
             <p className="whitespace-pre-wrap text-slate-200">{sel.description}</p>
             <dl className="grid gap-2 rounded-xl border border-line bg-ink-900 p-3 text-xs sm:grid-cols-2">
               <div>

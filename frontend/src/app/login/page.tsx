@@ -66,6 +66,10 @@ function LoginForm() {
         setErr("Administrators sign in through the private staff portal.");
         return;
       }
+      if (me.role === "department") {
+        router.replace(next === "/" ? "/department" : next);
+        return;
+      }
       router.replace(next);
     } catch (e) {
       submitting.current = false;
