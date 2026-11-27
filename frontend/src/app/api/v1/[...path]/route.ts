@@ -27,15 +27,18 @@ import { buildSimulationPdf } from "@/lib/server/pdf";
 import {
   addAudit,
   getContacts,
-  getStore,
+  getStoreAsync,
   newIncidentCode,
+  notifyAdmins,
   notifyPublishedAlert,
   pushNotification,
   saveStore,
+  saveStoreAsync,
   type Store,
   type StoredIncident,
   type StoredUser,
 } from "@/lib/server/store";
+import { getDbStatus, sendAdminAccountAlert } from "@/lib/server/supabaseDb";
 import { buildCsv, computeAnalytics } from "@/lib/utils/analytics";
 import type {
   AlertItem,
@@ -321,14 +324,18 @@ function clearSessionCookie(res: NextResponse, req: NextRequest): NextResponse {
 async function handleInner(req: NextRequest, context: { params: Promise<{ path: string[] }> }): Promise<NextResponse> {
   const { path: segs } = await context.params;
   const method = req.method.toUpperCase();
-  const store = getStore();
+  const store = await getStoreAsync();
   const route = segs.join("/");
 
   // ---- HEALTH & OPENAPI ----
   if (method === "GET" && route === "health") {
+    const db = getDbStatus();
     return NextResponse.json({
       status: "ok",
       database: store.settings.persistence_mode,
+      database_connected: db.connected,
+      database_provider: db.provider_label,
+      database_error: db.error,
       version: "0.3.0",
       ai_provider: resolveProvider(store.aiConfig),
     });
@@ -450,7 +457,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       created_at: new Date().toISOString(),
     };
     store.users.push(u);
-    addAudit(store, u.id, "register", "user", u.id, { email: u.email });
+    addAudit(store, u.id, "register", "user", u.id, { email: u.email, district_id: districtId });
     pushNotification(store, {
       user_id: u.id,
       kind: "system",
@@ -459,6 +466,25 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
         ? "Account created. Check your inbox to verify your email address."
         : "Account created. Outbound email is not configured on this server; you can verify your account inside Profile using your verification code.",
       link: "/profile",
+    });
+    const districtName = districtId ? store.districts.find((d) => d.id === districtId)?.name ?? null : null;
+    notifyAdmins(store, {
+      kind: "system",
+      title: "New citizen account created",
+      body: `${u.full_name || "Citizen"} (${u.email})${districtName ? ` · ${districtName}` : ""} registered.`,
+      link: "/admin/users",
+    });
+    void sendAdminAccountAlert({
+      eventType: "user_registered",
+      title: "New Citizen Account Created",
+      summary: "A new user account was registered on CrisisTwin AI.",
+      fields: {
+        Name: u.full_name || "Not provided",
+        Email: u.email,
+        District: districtName || "Not selected",
+        "Registered At": u.created_at,
+      },
+      fallbackSupportEmail: store.settings.support_email,
     });
     const token = createAccessToken(u.id, u.role, u.email, u.full_name);
     return setSessionCookie(
@@ -1489,6 +1515,26 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
           link: "/report",
         });
       }
+      notifyAdmins(store, {
+        kind: "incident",
+        title: `New ${inc.severity.toUpperCase()} report ${inc.code}`,
+        body: `${inc.type.replace(/_/g, " ")}${districtName ? ` in ${districtName}` : ""} · ${inc.description.slice(0, 120)}`,
+        link: "/admin/incidents",
+      });
+      void sendAdminAccountAlert({
+        eventType: "incident_submitted",
+        title: `New Emergency Report ${inc.code}`,
+        summary: `${inc.type.replace(/_/g, " ")} (${inc.severity}) reported on CrisisTwin AI.`,
+        fields: {
+          Code: inc.code,
+          Type: inc.type,
+          Severity: inc.severity,
+          District: districtName || inc.place_text || `${inc.latitude}, ${inc.longitude}`,
+          Reporter: u ? `${u.full_name || "Citizen"} (${u.email})` : "Guest reporter",
+          Description: inc.description.slice(0, 300),
+        },
+        fallbackSupportEmail: store.settings.support_email,
+      });
       return NextResponse.json(incidentOut(store, inc, { similar, guestCode: guestTrackingCode }), { status: 201 });
     }
   }
@@ -1917,7 +1963,10 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
   if (route === "admin/users" && method === "GET") {
     const admin = requireAdmin(req, store);
     if (admin instanceof NextResponse) return admin;
-    return NextResponse.json(store.users.map(userOut));
+    const sorted = [...store.users].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+    return NextResponse.json(sorted.map(userOut));
   }
 
   if (segs[0] === "admin" && segs[1] === "users" && segs.length === 4 && segs[3] === "reset-code" && method === "POST") {
@@ -2010,9 +2059,17 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
   if (route === "admin/settings") {
     const admin = requireAdmin(req, store);
     if (admin instanceof NextResponse) return admin;
+    const db = getDbStatus();
     if (method === "GET") {
       return NextResponse.json({
         ...store.settings,
+        persistence_mode: db.connected ? db.mode : store.settings.persistence_mode,
+        database_connected: db.connected,
+        database_provider: db.provider_label,
+        database_error: db.error,
+        admin_notify_configured: Boolean(
+          process.env.RESEND_API_KEY?.trim() || process.env.ADMIN_WEBHOOK_URL?.trim() || store.settings.smtp_configured
+        ),
         ai_provider_configured: Boolean(resolveProvider(store.aiConfig)),
       });
     }
@@ -2042,13 +2099,19 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       }
       store.settings.updated_at = new Date().toISOString();
       addAudit(store, admin.id, "update", "settings", null, body);
-      return NextResponse.json(store.settings);
+      return NextResponse.json({
+        ...store.settings,
+        database_connected: db.connected,
+        database_provider: db.provider_label,
+        database_error: db.error,
+      });
     }
   }
 
   if (route === "admin/stats" && method === "GET") {
     const admin = requireAdmin(req, store);
     if (admin instanceof NextResponse) return admin;
+    const db = getDbStatus();
     const assessments_by_category: Record<string, number> = {};
     for (const a of store.assessments) assessments_by_category[a.category] = (assessments_by_category[a.category] ?? 0) + 1;
     const resources_by_type: Record<string, number> = {};
@@ -2075,6 +2138,10 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       alerts_active: store.alerts.filter((a) => isAlertActive(a)).length,
       ai_requests_total: store.aiLogs.length,
       ai_errors_total: store.aiLogs.filter((l) => l.status === "error").length,
+      persistence_mode: db.connected ? db.mode : store.settings.persistence_mode,
+      database_connected: db.connected,
+      database_provider: db.provider_label,
+      database_error: db.error,
     });
   }
 
@@ -2085,7 +2152,7 @@ async function handle(req: NextRequest, context: { params: Promise<{ path: strin
   const res = await handleInner(req, context);
   const m = req.method.toUpperCase();
   if (m !== "GET" && m !== "HEAD" && m !== "OPTIONS" && res.status < 400) {
-    saveStore(getStore());
+    await saveStoreAsync(await getStoreAsync());
   }
   return res;
 }

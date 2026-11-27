@@ -100,21 +100,46 @@ export default function AdminSettingsPage() {
             <CardHeader title="Runtime integration status" />
             {s && (
               <div className="space-y-3 p-5 text-sm">
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-400">Persistence store</span>
-                  <Badge tone="cyan">{s.persistence_mode}</Badge>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-slate-400">Database</span>
+                  <Badge tone={s.database_connected ? "green" : "amber"}>
+                    {s.database_connected ? (s.database_provider ?? s.persistence_mode) : "Temporary (/tmp)"}
+                  </Badge>
                 </div>
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <span className="text-slate-400">AI provider</span>
                   <Badge tone={s.ai_provider_configured ? "green" : "amber"}>{s.ai_provider_configured ? "Configured" : "Not configured"}</Badge>
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-slate-400">Outbound SMTP email</span>
-                  <Badge tone={s.smtp_configured ? "green" : "amber"}>{s.smtp_configured ? "Configured" : "Not configured"}</Badge>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-slate-400">Admin account alerts</span>
+                  <Badge tone={s.admin_notify_configured || s.smtp_configured ? "green" : "cyan"}>
+                    {s.admin_notify_configured || s.smtp_configured ? "Email/Webhook + In-App" : "In-App Notification"}
+                  </Badge>
                 </div>
-                <Notice tone="cyan">
-                  When SMTP is not configured, verification and password reset codes remain explicit rather than simulating email delivery.
-                </Notice>
+                {s.database_error && (
+                  <Notice tone="amber">
+                    Database connection error: {s.database_error}
+                  </Notice>
+                )}
+                {!s.database_connected && (
+                  <div className="space-y-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs leading-relaxed text-amber-100">
+                    <p className="font-semibold text-amber-200">Connect Supabase PostgreSQL:</p>
+                    <p>
+                      1. In Supabase, open <b>Project Settings → Database → Connection string → Transaction pooler</b> (port <code className="text-cyan-300">6543</code>).
+                    </p>
+                    <p>
+                      2. Add <code className="text-cyan-300">DATABASE_URL</code> to your environment Secrets / variables and restart. Tables (<code className="text-cyan-300">ct_users</code>, <code className="text-cyan-300">ct_incidents</code>, <code className="text-cyan-300">ct_alerts</code>, <code className="text-cyan-300">ct_notifications</code>) are created automatically.
+                    </p>
+                    <p>
+                      3. Optional: add <code className="text-cyan-300">RESEND_API_KEY</code> and <code className="text-cyan-300">ADMIN_NOTIFY_EMAIL</code> in Secrets to receive an email whenever a new account registers.
+                    </p>
+                  </div>
+                )}
+                {s.database_connected && (
+                  <Notice tone="cyan">
+                    New user registrations and emergency reports sync automatically to your Supabase tables (ct_users, ct_incidents, ct_alerts, ct_notifications).
+                  </Notice>
+                )}
               </div>
             )}
           </Card>

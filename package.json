@@ -10,5 +10,9 @@
     "build": "npm run build --workspace=crisistwin-frontend",
     "start": "npm run start --workspace=crisistwin-frontend",
     "lint": "npm run lint --workspace=crisistwin-frontend"
+  },
+  "dependencies": {
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.1"
   }
 }

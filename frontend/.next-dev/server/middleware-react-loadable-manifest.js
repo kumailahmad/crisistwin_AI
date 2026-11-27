@@ -1,1 +1,1 @@
-self.__REACT_LOADABLE_MANIFEST="{\"components/charts/index.tsx -> ./SimpleCharts\":{\"id\":\"components/charts/index.tsx -> ./SimpleCharts\",\"files\":[\"static/chunks/_app-pages-browser_src_components_charts_SimpleCharts_tsx.js\"]}}"
+self.__REACT_LOADABLE_MANIFEST="{}"

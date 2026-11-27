@@ -1,16 +1,17 @@
 "use client";
 import { useMemo, useState } from "react";
-import { KeyRound, Search, ShieldCheck, UserCheck, UserX } from "lucide-react";
+import { KeyRound, RefreshCw, Search, ShieldCheck, UserCheck, UserX } from "lucide-react";
 import { Badge, Button, Card, ConfirmDialog, ErrorState, Input, Modal, Notice, PageHeader, Select, Skeleton, useToast } from "@/components/ui";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { fmtDate, useAsync } from "@/lib/hooks";
-import { admin } from "@/lib/services";
+import { admin, districts as districtsApi } from "@/lib/services";
 import type { User } from "@/lib/types";
 
 export default function AdminUsers() {
   const toast = useToast();
   const { user: me } = useAuth();
   const q = useAsync(() => admin.users(), []);
+  const ds = useAsync(() => districtsApi.list().catch(() => []), []);
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -18,13 +19,18 @@ export default function AdminUsers() {
   const [resetInfo, setResetInfo] = useState<{ code: string; expires_in_minutes: number; email: string } | null>(null);
   const [issuingId, setIssuingId] = useState<number | null>(null);
 
+  const districtNames = useMemo(
+    () => new Map((ds.data ?? []).map((d) => [d.id, d.name])),
+    [ds.data]
+  );
+
   const list = useMemo(
     () =>
       (q.data ?? []).filter((u) => {
         if (roleFilter && u.role !== roleFilter) return false;
         if (statusFilter === "active" && !u.is_active) return false;
         if (statusFilter === "inactive" && u.is_active) return false;
-        if (search && !`${u.full_name ?? ""} ${u.email}`.toLowerCase().includes(search.toLowerCase())) return false;
+        if (search && !`${u.full_name ?? ""} ${u.email} ${u.phone ?? ""}`.toLowerCase().includes(search.toLowerCase())) return false;
         return true;
       }),
     [q.data, search, roleFilter, statusFilter]
@@ -46,11 +52,19 @@ export default function AdminUsers() {
 
   return (
     <>
-      <PageHeader title="User management" subtitle="Search users, assign administrator roles, suspend or reactivate accounts, and issue one-time password reset codes." />
+      <PageHeader
+        title="User management"
+        subtitle="Inspect registered citizens, assign administrator roles, suspend or reactivate accounts, and issue one-time password reset codes."
+        actions={
+          <Button size="sm" variant="outline" onClick={q.reload} loading={q.loading}>
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </Button>
+        }
+      />
       <div className="mb-4 flex flex-wrap gap-2">
         <div className="relative min-w-[220px] flex-1">
           <Search className="absolute left-3 top-3 h-4 w-4 text-slate-500" />
-          <Input className="pl-9" placeholder="Search by name or email" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search users" />
+          <Input className="pl-9" placeholder="Search by name, email, or phone" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search users" />
         </div>
         <Select className="w-36" value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} aria-label="Filter role">
           <option value="">All roles</option>
@@ -72,6 +86,7 @@ export default function AdminUsers() {
               <thead className="text-left text-xs uppercase tracking-wider text-slate-500">
                 <tr>
                   <th className="px-5 py-3">User</th>
+                  <th>District / Phone</th>
                   <th>Role</th>
                   <th>Status</th>
                   <th>Joined</th>
@@ -81,11 +96,16 @@ export default function AdminUsers() {
               <tbody className="divide-y divide-line/60">
                 {list.map((u) => {
                   const self = u.id === me?.id;
+                  const dist = u.district_id ? districtNames.get(u.district_id) : null;
                   return (
                     <tr key={u.id} className="text-slate-300 hover:bg-ink-800/50">
                       <td className="px-5 py-3">
                         <span className="font-medium text-white">{u.full_name ?? u.email}</span>
-                        <span className="block text-xs text-slate-500">{u.email}</span>
+                        <span className="block text-xs text-slate-400">{u.email}</span>
+                      </td>
+                      <td className="text-xs text-slate-400">
+                        <span className="block text-slate-300">{dist ?? "All Balochistan"}</span>
+                        {u.phone && <span className="block font-mono">{u.phone}</span>}
                       </td>
                       <td>
                         {u.role === "admin" ? (
@@ -97,7 +117,12 @@ export default function AdminUsers() {
                           <Badge>User</Badge>
                         )}
                       </td>
-                      <td>{u.is_active ? <Badge tone="green">Active</Badge> : <Badge tone="red">Deactivated</Badge>}</td>
+                      <td>
+                        <div className="flex flex-wrap gap-1">
+                          {u.is_active ? <Badge tone="green">Active</Badge> : <Badge tone="red">Deactivated</Badge>}
+                          {u.email_verified ? <Badge tone="cyan">Verified</Badge> : <Badge tone="amber">Unverified</Badge>}
+                        </div>
+                      </td>
                       <td className="text-xs text-slate-500">{u.created_at ? fmtDate(u.created_at) : "—"}</td>
                       <td className="space-x-2 whitespace-nowrap px-4 text-right">
                         <Button size="sm" variant="ghost" disabled={!u.is_active} loading={issuingId === u.id} onClick={() => issueReset(u)} title="Generate 15-min password reset code">

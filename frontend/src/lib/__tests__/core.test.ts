@@ -13,6 +13,12 @@ import {
   verifyPassword,
 } from "../server/auth";
 import { inBalochistan, kmBetween, pointInGeometry, validatePolygon } from "../server/geo";
+import {
+  classifyDatabaseUrl,
+  normalizeDatabaseUrl,
+  redactDbError,
+  validateHttpsExternalUrl,
+} from "../server/supabaseDb";
 import { buildCsv, compareSimulations, computeAnalytics, csvCell } from "../utils/analytics";
 import { createOfflineDraft, parseDrafts } from "../utils/offlineDrafts";
 import { INCIDENT_TYPES, type AlertItem, type Incident, type Resource, type RiskAssessment, type Simulation } from "../types";
@@ -155,3 +161,51 @@ test("guest verification PINs verify in constant time and support IP rate limiti
   assert.equal(incidentRateOk("guest:203.0.113.10"), true);
   assert.equal(trackRateOk("203.0.113.10"), true);
 });
+
+test("classifyDatabaseUrl identifies Supabase pooler, local Postgres, and empty configuration", () => {
+  assert.deepEqual(
+    classifyDatabaseUrl("postgresql://postgres.abcd:secret@aws-0-ap-south-1.pooler.supabase.com:6543/postgres"),
+    { configured: true, mode: "supabase-postgres", useSsl: true, invalidReason: null }
+  );
+  assert.deepEqual(
+    classifyDatabaseUrl("postgresql://postgres:pass@localhost:5432/crisistwin"),
+    { configured: true, mode: "postgres", useSsl: false, invalidReason: null }
+  );
+  assert.deepEqual(classifyDatabaseUrl("   "), {
+    configured: false,
+    mode: "file-backed-tmp",
+    useSsl: false,
+    invalidReason: null,
+  });
+});
+
+test("normalizeDatabaseUrl strips quotes, DATABASE_URL= prefix, SQLAlchemy driver, encodes special password chars, and rejects https URLs", () => {
+  assert.equal(
+    normalizeDatabaseUrl('"postgresql://postgres.abcd:pass@aws-0-ap-south-1.pooler.supabase.com:6543/postgres"').url,
+    "postgresql://postgres.abcd:pass@aws-0-ap-south-1.pooler.supabase.com:6543/postgres"
+  );
+  assert.equal(
+    normalizeDatabaseUrl("DATABASE_URL=postgresql+psycopg://postgres:My#Pass@db.xyz.supabase.co:5432/postgres").url,
+    "postgresql://postgres:My%23Pass@db.xyz.supabase.co:5432/postgres"
+  );
+  const httpsRes = normalizeDatabaseUrl("https://xyz.supabase.co");
+  assert.equal(httpsRes.url, null);
+  assert.ok(httpsRes.invalidReason?.includes("HTTPS"));
+});
+
+test("redactDbError strips database credentials from connection strings and errors", () => {
+  const err = new Error("connect ECONNREFUSED postgresql://postgres.xyz:SuperSecret123@db.xyz.supabase.co:5432/postgres");
+  const redacted = redactDbError(err);
+  assert.ok(!redacted.includes("SuperSecret123"));
+  assert.ok(redacted.includes("postgresql://***@db.xyz.supabase.co"));
+});
+
+test("validateHttpsExternalUrl enforces HTTPS and rejects private or metadata hosts", () => {
+  assert.equal(validateHttpsExternalUrl("https://xyz.supabase.co")?.hostname, "xyz.supabase.co");
+  assert.equal(validateHttpsExternalUrl("http://xyz.supabase.co"), null);
+  assert.equal(validateHttpsExternalUrl("https://127.0.0.1/rest/v1"), null);
+  assert.equal(validateHttpsExternalUrl("https://169.254.169.254/latest/meta-data"), null);
+  assert.equal(validateHttpsExternalUrl("https://10.0.0.5/hook"), null);
+  assert.equal(validateHttpsExternalUrl("https://192.168.1.20/hook"), null);
+});
+

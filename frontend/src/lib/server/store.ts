@@ -2,6 +2,7 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { hashPassword } from "./auth";
+import { getDbStatus, initAndLoadPostgresStore, saveStoreToDatabase } from "./supabaseDb";
 import type {
   AiConfig,
   AiLogEntry,
@@ -249,20 +250,23 @@ function syncEnvAdmin(store: Store): void {
   });
 }
 
-function createInitialStore(): Store {
-  const persisted = loadPersistedStore();
+function createInitialStore(seededFromDb?: Store | null): Store {
+  const persisted = seededFromDb ?? loadPersistedStore();
   if (persisted) {
     // Re-sync environment-derived provider/SMTP flags and env admin credentials without wiping user data
     const freshAi = defaultAiConfig();
+    const dbStatus = getDbStatus();
     persisted.aiConfig = { ...persisted.aiConfig, groq_configured: freshAi.groq_configured, gemini_configured: freshAi.gemini_configured };
-    persisted.settings.smtp_configured = Boolean(process.env.SMTP_HOST?.trim());
+    persisted.settings.smtp_configured = Boolean(process.env.SMTP_HOST?.trim() || process.env.RESEND_API_KEY?.trim());
     persisted.settings.ai_provider_configured = Boolean(persisted.aiConfig.provider_active);
+    persisted.settings.persistence_mode = dbStatus.connected ? dbStatus.mode : "file-backed-tmp";
     syncEnvAdmin(persisted);
     saveStore(persisted);
     return persisted;
   }
 
   const aiCfg = defaultAiConfig();
+  const dbStatus = getDbStatus();
   const store: Store = {
     users: [],
     districts: [],
@@ -283,9 +287,9 @@ function createInitialStore(): Store {
       emergency_primary_number: "15",
       default_alert_notifications: true,
       allow_public_registration: true,
-      smtp_configured: Boolean(process.env.SMTP_HOST?.trim()),
+      smtp_configured: Boolean(process.env.SMTP_HOST?.trim() || process.env.RESEND_API_KEY?.trim()),
       ai_provider_configured: Boolean(aiCfg.provider_active),
-      persistence_mode: "file-backed-tmp",
+      persistence_mode: dbStatus.connected ? dbStatus.mode : "file-backed-tmp",
       updated_at: new Date().toISOString(),
     },
     auditLogs: [],
@@ -355,13 +359,37 @@ function createInitialStore(): Store {
   return store;
 }
 
-const g = globalThis as unknown as { __ctStore?: Store };
+const g = globalThis as unknown as { __ctStore?: Store; __ctStoreInitPromise?: Promise<Store> };
 
 export function getStore(): Store {
   if (!g.__ctStore) {
     g.__ctStore = createInitialStore();
   }
   return g.__ctStore;
+}
+
+export async function getStoreAsync(): Promise<Store> {
+  if (g.__ctStore) return g.__ctStore;
+  if (!g.__ctStoreInitPromise) {
+    g.__ctStoreInitPromise = (async () => {
+      const { store: dbStore, status } = await initAndLoadPostgresStore();
+      const s = createInitialStore(dbStore);
+      s.settings.persistence_mode = status.connected ? status.mode : "file-backed-tmp";
+      if (status.connected && !dbStore) {
+        // Seed initial Balochistan districts & env admin into newly created database tables
+        await saveStoreToDatabase(s);
+      }
+      g.__ctStore = s;
+      return s;
+    })();
+  }
+  return g.__ctStoreInitPromise;
+}
+
+export async function saveStoreAsync(store: Store): Promise<void> {
+  saveStore(store);
+  const status = await saveStoreToDatabase(store);
+  store.settings.persistence_mode = status.connected ? status.mode : "file-backed-tmp";
 }
 
 export function addAudit(
@@ -401,6 +429,21 @@ export function pushNotification(
   store.notifications.unshift(row);
   if (store.notifications.length > 2000) store.notifications.length = 2000;
   return row;
+}
+
+/** Notify all active administrator accounts of new citizen signups or incoming reports. */
+export function notifyAdmins(
+  store: Store,
+  n: { kind: AppNotification["kind"]; title: string; body: string; link?: string | null }
+): number {
+  let count = 0;
+  for (const u of store.users) {
+    if (u.role === "admin" && u.is_active) {
+      pushNotification(store, { user_id: u.id, ...n });
+      count++;
+    }
+  }
+  return count;
 }
 
 /** Fan out notifications ONLY for published alerts to active users whose preferences allow it. */

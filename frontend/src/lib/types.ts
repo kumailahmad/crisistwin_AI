@@ -206,6 +206,10 @@ export interface PlatformSettings {
   smtp_configured: boolean;
   ai_provider_configured: boolean;
   persistence_mode: string;
+  database_connected?: boolean;
+  database_provider?: string;
+  database_error?: string | null;
+  admin_notify_configured?: boolean;
   updated_at: string;
 }
 
@@ -231,6 +235,10 @@ export interface AdminStats {
   alerts_active: number;
   ai_requests_total: number;
   ai_errors_total: number;
+  persistence_mode?: string;
+  database_connected?: boolean;
+  database_provider?: string;
+  database_error?: string | null;
 }
 
 export interface Overview {
