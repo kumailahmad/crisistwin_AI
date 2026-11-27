@@ -7,6 +7,7 @@ import { cn } from "@/lib/cn";
 import { fmtDate, useAsync } from "@/lib/hooks";
 import { useCitizenLocation } from "@/lib/hooks/useCitizenLocation";
 import { alerts, districts } from "@/lib/services";
+import { STATIC_DISTRICT_OPTIONS } from "@/lib/data/districtsStatic";
 import type { AlertItem } from "@/lib/types";
 
 type AlertTab = "all" | "my_district" | "critical" | "high" | "resolved";
@@ -31,15 +32,19 @@ const TABS: { id: AlertTab; label: string }[] = [
 
 export default function CitizenAlertsPage() {
   const { demo } = useAuth();
-  const ds = useAsync(() => districts.list().catch(() => []), [], "alerts-districts");
-  const loc = useCitizenLocation(ds.data ?? []);
+  const ds = useAsync(() => districts.list().catch(() => STATIC_DISTRICT_OPTIONS), [], "districts", {
+    initialData: STATIC_DISTRICT_OPTIONS,
+    ttlMs: 300_000,
+  });
+  const loc = useCitizenLocation(ds.data ?? STATIC_DISTRICT_OPTIONS);
   const [tab, setTab] = useState<AlertTab>("all");
   const [manualDistrictId, setManualDistrictId] = useState("");
 
   const list = useAsync(
     () => (demo ? Promise.resolve([]) : alerts.list({ include_expired: true })),
     [demo],
-    "citizen-alerts"
+    "citizen-alerts",
+    { ttlMs: 30_000 }
   );
 
   const effectiveDistrictId = manualDistrictId

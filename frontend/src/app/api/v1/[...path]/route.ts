@@ -1,7 +1,7 @@
 import crypto from "crypto";
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { assess as runRiskAssess } from "@/lib/demo/riskEngine";
-import { AIFailure, AIUnavailable, callAi, resolveProvider } from "@/lib/server/ai";
+import { AIFailure, AIUnavailable, callAi, resolveProvider, streamAi } from "@/lib/server/ai";
 import {
   SESSION_COOKIE,
   aiRateOk,
@@ -24,6 +24,7 @@ import {
 } from "@/lib/server/auth";
 import { inBalochistan, kmBetween, pointInGeometry, validatePolygon } from "@/lib/server/geo";
 import { buildSimulationPdf } from "@/lib/server/pdf";
+import { cachedPublicJson, invalidateCache, noStoreJson } from "@/lib/server/responseCache";
 import {
   addAudit,
   getContacts,
@@ -39,8 +40,8 @@ import {
   type StoredUser,
 } from "@/lib/server/store";
 import { handleDepartmentRoutes } from "@/lib/server/departmentApi";
-import { runIncidentIntelligencePipeline } from "@/lib/server/routingAgent";
-import { getDbStatus, sendAdminAccountAlert } from "@/lib/server/supabaseDb";
+import { recoverStalePendingIncidents, runIncidentIntelligencePipeline } from "@/lib/server/routingAgent";
+import { getDbStatus, sendAdminAccountAlert, type SyncScope } from "@/lib/server/supabaseDb";
 import { buildCsv, computeAnalytics } from "@/lib/utils/analytics";
 import type {
   AlertItem,
@@ -106,7 +107,43 @@ const ALERT_STATUSES = new Set<string>(["draft", "published", "expired"]);
 const PHONE_RE = /^[+0-9][0-9 \-()]{5,24}$/;
 
 function err(status: number, detail: string) {
-  return NextResponse.json({ detail }, { status });
+  return noStoreJson({ detail }, { status });
+}
+
+function paginateRows<T>(rows: T[], req: NextRequest, defaultLimit: number, maxLimit: number): T[] {
+  const sp = req.nextUrl.searchParams;
+  const rawLimit = sp.get("limit");
+  const rawOffset = sp.get("offset");
+  const limit = rawLimit ? Math.max(1, Math.min(maxLimit, Math.floor(Number(rawLimit) || defaultLimit))) : defaultLimit;
+  const offset = rawOffset ? Math.max(0, Math.floor(Number(rawOffset) || 0)) : 0;
+  return rows.slice(offset, offset + limit);
+}
+
+function scheduleBackground(fn: () => Promise<void>): void {
+  try {
+    after(async () => {
+      try {
+        await fn();
+      } catch (e) {
+        console.error("[background]", e);
+      }
+    });
+  } catch {
+    void fn().catch((e) => console.error("[background-fallback]", e));
+  }
+}
+
+function scopesForRoute(route: string): SyncScope[] {
+  const seg = route.split("/")[0] || "";
+  if (seg === "alerts") return ["alerts", "notifications", "audit"];
+  if (seg === "incidents") return ["incidents", "notifications", "audit"];
+  if (seg === "notifications") return ["notifications"];
+  if (seg === "auth" || seg === "users") return ["users", "notifications", "audit"];
+  if (seg === "department-manager" || seg === "department-portal") {
+    return ["departments", "routingRules", "assignments", "integrations", "agent", "incidents", "notifications", "audit"];
+  }
+  if (seg === "admin") return ["users", "agent", "audit"];
+  return [];
 }
 
 function userOut(u: StoredUser, store?: Store) {
@@ -339,11 +376,23 @@ function clearSessionCookie(res: NextResponse, req: NextRequest): NextResponse {
   return res;
 }
 
-async function handleInner(req: NextRequest, context: { params: Promise<{ path: string[] }> }): Promise<NextResponse> {
+async function handleInner(req: NextRequest, context: { params: Promise<{ path: string[] }> }): Promise<NextResponse | { res: NextResponse; storeDurMs: number }> {
   const { path: segs } = await context.params;
   const method = req.method.toUpperCase();
-  const store = await getStoreAsync();
   const route = segs.join("/");
+
+  // Fast stateless session probe for anonymous visitors: avoid hydrating store/DB when unauthenticated
+  if (method === "GET" && route === "auth/session") {
+    const auth = req.headers.get("authorization") ?? "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7).trim() : req.cookies.get(SESSION_COOKIE)?.value ?? "";
+    if (!token || !decodeAccessToken(token)) {
+      return { res: noStoreJson({ authenticated: false, user: null }), storeDurMs: 0 };
+    }
+  }
+
+  const tStore = performance.now();
+  const store = await getStoreAsync();
+  const storeDurMs = performance.now() - tStore;
 
   const deptHandled = await handleDepartmentRoutes({
     req,
@@ -353,7 +402,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
     requireAdmin: () => requireAdmin(req, store),
     requireUser: () => getUser(req, store),
   });
-  if (deptHandled) return deptHandled;
+  if (deptHandled) return { res: deptHandled, storeDurMs };
 
   // ---- HEALTH & OPENAPI ----
   if (method === "GET" && route === "health") {
@@ -706,28 +755,48 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
   // ---- ALERTS ----
   if (route === "alerts") {
     if (method === "GET") {
-      const maybeUser = getOptionalUser(req, store);
       const sp = req.nextUrl.searchParams;
       const did = sp.get("district_id") ? Number(sp.get("district_id")) : null;
-      const includeAll = sp.get("all") === "1" && maybeUser?.role === "admin";
+      const wantAll = sp.get("all") === "1";
       const includeExpired = sp.get("include_expired") === "1";
-      const dMap = new Map(store.districts.map((d) => [d.id, d.name]));
-      const now = Date.now();
-      let rows = [...store.alerts];
-      if (!includeAll) {
-        rows = includeExpired
-          ? rows.filter((a) => a.status === "published" || a.status === "expired")
-          : rows.filter((a) => isAlertActive(a, now));
+      const maybeUser = wantAll ? getOptionalUser(req, store) : null;
+      const includeAll = wantAll && maybeUser?.role === "admin";
+
+      if (includeAll) {
+        const dMap = new Map(store.districts.map((d) => [d.id, d.name]));
+        let rows = [...store.alerts];
+        if (did) rows = rows.filter((a) => a.district_ids.length === 0 || a.district_ids.includes(did));
+        return {
+          res: noStoreJson(
+            rows.map((a) => ({
+              ...a,
+              district_names: a.district_ids.map((id) => dMap.get(id) ?? `District ${id}`),
+            }))
+          ),
+          storeDurMs,
+        };
       }
-      if (did) {
-        rows = rows.filter((a) => a.district_ids.length === 0 || a.district_ids.includes(did));
-      }
-      return NextResponse.json(
-        rows.map((a) => ({
-          ...a,
-          district_names: a.district_ids.map((id) => dMap.get(id) ?? `District ${id}`),
-        }))
-      );
+
+      const res = cachedPublicJson(req, {
+        tag: "alerts",
+        key: `d=${did ?? "all"}&exp=${includeExpired ? 1 : 0}`,
+        maxAge: 15,
+        sMaxAge: 60,
+        swr: 120,
+        compute: () => {
+          const dMap = new Map(store.districts.map((d) => [d.id, d.name]));
+          const now = Date.now();
+          let rows = includeExpired
+            ? store.alerts.filter((a) => a.status === "published" || a.status === "expired")
+            : store.alerts.filter((a) => isAlertActive(a, now));
+          if (did) rows = rows.filter((a) => a.district_ids.length === 0 || a.district_ids.includes(did));
+          return rows.map((a) => ({
+            ...a,
+            district_names: a.district_ids.map((id) => dMap.get(id) ?? `District ${id}`),
+          }));
+        },
+      });
+      return { res, storeDurMs };
     }
     if (method === "POST") {
       const admin = requireAdmin(req, store);
@@ -775,6 +844,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       store.alerts.unshift(item);
       if (item.status === "published") notifyPublishedAlert(store, item);
       addAudit(store, admin.id, "create", "alert", item.id, { title: item.title, status: item.status });
+      invalidateCache("alerts");
       return NextResponse.json(item, { status: 201 });
     }
   }
@@ -817,6 +887,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
         }
       }
       addAudit(store, admin.id, "update", "alert", item.id, { status: item.status });
+      invalidateCache("alerts");
       return NextResponse.json(item);
     }
     if (method === "DELETE") {
@@ -825,6 +896,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       if (!item) return err(404, "Alert not found");
       store.alerts = store.alerts.filter((a) => a.id !== id);
       addAudit(store, admin.id, "delete", "alert", id, { title: item.title });
+      invalidateCache("alerts");
       return new NextResponse(null, { status: 204 });
     }
   }
@@ -833,10 +905,11 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
   if (route === "notifications" && method === "GET") {
     const u = getUser(req, store);
     if (u instanceof NextResponse) return u;
-    const rows = store.notifications.filter((n) => n.user_id === u.id).slice(0, 100);
-    return NextResponse.json({
+    const all = store.notifications.filter((n) => n.user_id === u.id);
+    const rows = paginateRows(all, req, 100, 200);
+    return noStoreJson({
       items: rows,
-      unread_count: rows.filter((n) => !n.read).length,
+      unread_count: all.filter((n) => !n.read).length,
     });
   }
 
@@ -860,30 +933,48 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
 
   // ---- DISTRICTS ----
   if (route === "districts/boundaries/all" && method === "GET") {
-    const features = [...store.districts]
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map((d) => {
-        const b = store.boundaries.get(d.id);
-        if (!b) return null;
-        return {
-          type: "Feature",
-          geometry: b.geometry,
-          properties: {
-            district_id: d.id,
-            name: d.name,
-            verified: d.verified,
-            source: b.source,
-            area_km2: d.area_km2,
-          },
-        };
-      })
-      .filter(Boolean);
-    return NextResponse.json({ type: "FeatureCollection", features });
+    const res = cachedPublicJson(req, {
+      tag: "boundaries",
+      key: "all",
+      maxAge: 60,
+      sMaxAge: 300,
+      swr: 600,
+      compute: () => {
+        const features = [...store.districts]
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map((d) => {
+            const b = store.boundaries.get(d.id);
+            if (!b) return null;
+            return {
+              type: "Feature",
+              geometry: b.geometry,
+              properties: {
+                district_id: d.id,
+                name: d.name,
+                verified: d.verified,
+                source: b.source,
+                area_km2: d.area_km2,
+              },
+            };
+          })
+          .filter(Boolean);
+        return { type: "FeatureCollection", features };
+      },
+    });
+    return { res, storeDurMs };
   }
 
   if (route === "districts") {
     if (method === "GET") {
-      return NextResponse.json([...store.districts].sort((a, b) => a.name.localeCompare(b.name)));
+      const res = cachedPublicJson(req, {
+        tag: "districts",
+        key: "all",
+        maxAge: 60,
+        sMaxAge: 300,
+        swr: 600,
+        compute: () => [...store.districts].sort((a, b) => a.name.localeCompare(b.name)),
+      });
+      return { res, storeDurMs };
     }
     if (method === "POST") {
       const admin = requireAdmin(req, store);
@@ -911,6 +1002,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       };
       store.districts.push(d);
       addAudit(store, admin.id, "create", "district", d.id, { name: d.name });
+      invalidateCache("districts", "boundaries");
       return NextResponse.json(d, { status: 201 });
     }
   }
@@ -921,7 +1013,15 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
     const d = store.districts.find((x) => x.id === id);
     if (method === "GET") {
       if (!d) return err(404, "District not found");
-      return NextResponse.json(d);
+      const res = cachedPublicJson(req, {
+        tag: "districts",
+        key: `id=${id}`,
+        maxAge: 60,
+        sMaxAge: 300,
+        swr: 600,
+        compute: () => d,
+      });
+      return { res, storeDurMs };
     }
     if (method === "PATCH") {
       const admin = requireAdmin(req, store);
@@ -933,6 +1033,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
         if (k in body) (d as unknown as Record<string, unknown>)[k] = body[k];
       }
       addAudit(store, admin.id, "update", "district", d.id, body);
+      invalidateCache("districts", "boundaries");
       return NextResponse.json(d);
     }
     if (method === "DELETE") {
@@ -947,6 +1048,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       store.districts = store.districts.filter((x) => x.id !== id);
       store.boundaries.delete(id);
       addAudit(store, admin.id, "delete", "district", id, { name: d.name });
+      invalidateCache("districts", "boundaries");
       return new NextResponse(null, { status: 204 });
     }
   }
@@ -958,11 +1060,19 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       if (!d) return err(404, "District not found");
       const b = store.boundaries.get(id);
       if (!b) return err(404, "No verified boundary is available for this district");
-      return NextResponse.json({
-        type: "Feature",
-        geometry: b.geometry,
-        properties: { district_id: d.id, name: d.name, crs: b.crs, source: b.source },
+      const res = cachedPublicJson(req, {
+        tag: "boundaries",
+        key: `id=${id}`,
+        maxAge: 60,
+        sMaxAge: 300,
+        swr: 600,
+        compute: () => ({
+          type: "Feature",
+          geometry: b.geometry,
+          properties: { district_id: d.id, name: d.name, crs: b.crs, source: b.source },
+        }),
       });
+      return { res, storeDurMs };
     }
     if (method === "PUT") {
       const admin = requireAdmin(req, store);
@@ -981,6 +1091,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       });
       d.has_boundary = true;
       addAudit(store, admin.id, "set_boundary", "district", id, { source: body.source });
+      invalidateCache("districts", "boundaries");
       return new NextResponse(null, { status: 204 });
     }
   }
@@ -1160,6 +1271,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       });
     }
     addAudit(store, admin.id, "bulk_create", "resource", null, { count: items.length });
+    invalidateCache("resources");
     return NextResponse.json({ created: items.length }, { status: 201 });
   }
 
@@ -1173,8 +1285,27 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       const latRaw = sp.get("lat");
       const lonRaw = sp.get("lon");
       const hasOrigin = latRaw !== null && lonRaw !== null && Number.isFinite(Number(latRaw)) && Number.isFinite(Number(lonRaw));
-      const uLat = Number(latRaw), uLon = Number(lonRaw);
+      const limitParam = sp.get("limit");
+      const offsetParam = sp.get("offset");
 
+      if (!hasOrigin && !q && !bbox && !limitParam && !offsetParam) {
+        const res = cachedPublicJson(req, {
+          tag: "resources",
+          key: `t=${type ?? "all"}&d=${did ?? "all"}`,
+          maxAge: 30,
+          sMaxAge: 120,
+          swr: 300,
+          compute: () => {
+            let rows = store.resources;
+            if (type) rows = rows.filter((r) => r.type === type);
+            if (did) rows = rows.filter((r) => r.district_id === Number(did));
+            return [...rows].sort((a, b) => a.name.localeCompare(b.name));
+          },
+        });
+        return { res, storeDurMs };
+      }
+
+      const uLat = Number(latRaw), uLon = Number(lonRaw);
       let rows = store.resources.map((r) => ({
         ...r,
         ...(hasOrigin ? { distance_km: Math.round(kmBetween(uLat, uLon, r.latitude, r.longitude) * 10) / 10 } : {}),
@@ -1193,7 +1324,10 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       } else {
         rows.sort((a, b) => a.name.localeCompare(b.name));
       }
-      return NextResponse.json(rows);
+      const paged = paginateRows(rows, req, 500, 1000);
+      const res = NextResponse.json(paged);
+      res.headers.set("Cache-Control", "public, max-age=15, s-maxage=30, stale-while-revalidate=60");
+      return { res, storeDurMs };
     }
     if (method === "POST") {
       const admin = requireAdmin(req, store);
@@ -1218,6 +1352,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       };
       store.resources.push(r);
       addAudit(store, admin.id, "create", "resource", r.id, { name: r.name });
+      invalidateCache("resources");
       return NextResponse.json(r, { status: 201 });
     }
   }
@@ -1251,6 +1386,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
         availability_status: (body.availability_status ?? r.availability_status ?? "available") as AvailabilityStatus,
       });
       addAudit(store, admin.id, "update", "resource", r.id);
+      invalidateCache("resources");
       return NextResponse.json(r);
     }
     if (method === "DELETE") {
@@ -1259,6 +1395,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       if (!r) return err(404, "Resource not found");
       store.resources = store.resources.filter((x) => x.id !== id);
       addAudit(store, admin.id, "delete", "resource", id, { name: r.name });
+      invalidateCache("resources");
       return new NextResponse(null, { status: 204 });
     }
   }
@@ -1331,16 +1468,32 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
   if (route === "incidents/mine" && method === "GET") {
     const u = getUser(req, store);
     if (u instanceof NextResponse) return u;
-    return NextResponse.json(store.incidents.filter((i) => i.user_id === u.id).slice(0, 100).map((i) => incidentOut(store, i)));
+    const rows = paginateRows(
+      store.incidents.filter((i) => i.user_id === u.id),
+      req,
+      100,
+      300
+    ).map((i) => incidentOut(store, i));
+    return noStoreJson(rows);
   }
 
   if (route === "incidents/public" && method === "GET") {
-    return NextResponse.json(
-      store.incidents
-        .filter((i) => i.status === "verified" || i.status === "response_assigned" || i.status === "resolved")
-        .slice(0, 300)
-        .map((i) => incidentOut(store, i, { publicView: true }))
-    );
+    const sp = req.nextUrl.searchParams;
+    const limit = Math.max(1, Math.min(300, Number(sp.get("limit") || "120") || 120));
+    const offset = Math.max(0, Number(sp.get("offset") || "0") || 0);
+    const res = cachedPublicJson(req, {
+      tag: "incidents_public",
+      key: `l=${limit}&o=${offset}`,
+      maxAge: 10,
+      sMaxAge: 30,
+      swr: 60,
+      compute: () =>
+        store.incidents
+          .filter((i) => i.status === "verified" || i.status === "response_assigned" || i.status === "resolved")
+          .slice(offset, offset + limit)
+          .map((i) => incidentOut(store, i, { publicView: true })),
+    });
+    return { res, storeDurMs };
   }
 
   if (route === "incidents/track" && method === "POST") {
@@ -1364,11 +1517,13 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
     }
 
     const district = inc.district_id ? store.districts.find((d) => d.id === inc.district_id) : null;
-    return NextResponse.json({
+    return noStoreJson({
       code: inc.code,
       type: inc.type,
       severity: inc.severity,
       status: inc.status,
+      workflow_status: inc.workflow_status ?? "submitted",
+      ai_analysis_status: inc.ai_analysis_status ?? "pending",
       district_name: inc.district_name ?? district?.name ?? null,
       assigned_team: inc.assigned_team ?? null,
       admin_note: inc.admin_note ?? null,
@@ -1386,13 +1541,16 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
     for (const i of store.incidents) {
       if (i.status in counts) counts[i.status as keyof typeof counts]++;
     }
-    return NextResponse.json({ total: store.incidents.length, ...counts });
+    return noStoreJson({ total: store.incidents.length, ...counts });
   }
 
   if (route === "incidents") {
     if (method === "GET") {
       const admin = requireAdmin(req, store);
       if (admin instanceof NextResponse) return admin;
+      scheduleBackground(async () => {
+        await recoverStalePendingIncidents(store, 3);
+      });
       const sp = req.nextUrl.searchParams;
       const status = sp.get("status");
       const type = sp.get("type");
@@ -1401,7 +1559,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       if (status) rows = rows.filter((i) => i.status === status);
       if (type) rows = rows.filter((i) => i.type === type);
       if (did) rows = rows.filter((i) => i.district_id === Number(did));
-      return NextResponse.json(rows.slice(0, 500).map((i) => incidentOut(store, i)));
+      return noStoreJson(paginateRows(rows, req, 200, 500).map((i) => incidentOut(store, i)));
     }
     if (method === "POST") {
       if (hasSessionCookie(req) && !verifyMutationOrigin(req)) {
@@ -1508,8 +1666,8 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
         people_affected,
         observed_at,
         status: "pending",
-        workflow_status: store.agentConfig.enabled ? "ai_processing" : "awaiting_verification",
-        ai_analysis_status: store.agentConfig.enabled ? "processing" : "skipped",
+        workflow_status: store.agentConfig.enabled ? "submitted" : "awaiting_verification",
+        ai_analysis_status: store.agentConfig.enabled ? "pending" : "skipped",
         admin_note: null,
         assigned_team: null,
         assigned_department_id: null,
@@ -1554,24 +1712,26 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
         body: `${inc.type.replace(/_/g, " ")}${districtName ? ` in ${districtName}` : ""} · ${inc.description.slice(0, 120)}`,
         link: "/admin/departments?tab=monitoring",
       });
-      void sendAdminAccountAlert({
-        eventType: "incident_submitted",
-        title: `New Emergency Report ${inc.code}`,
-        summary: `${inc.type.replace(/_/g, " ")} (${inc.severity}) reported on CrisisTwin AI.`,
-        fields: {
-          Code: inc.code,
-          Type: inc.type,
-          Severity: inc.severity,
-          District: districtName || inc.place_text || `${inc.latitude}, ${inc.longitude}`,
-          Reporter: u ? `${u.full_name || "Citizen"} (${u.email})` : "Guest reporter",
-          Description: inc.description.slice(0, 300),
-        },
-        fallbackSupportEmail: store.settings.support_email,
+      // Durable synchronous save before returning Reference ID; then reliable Next after() async pipeline
+      await saveStoreAsync(store, { scopes: ["incidents", "notifications", "audit"] });
+      scheduleBackground(async () => {
+        await sendAdminAccountAlert({
+          eventType: "incident_submitted",
+          title: `New Emergency Report ${inc.code}`,
+          summary: `${inc.type.replace(/_/g, " ")} (${inc.severity}) reported on CrisisTwin AI.`,
+          fields: {
+            Code: inc.code,
+            Type: inc.type,
+            Severity: inc.severity,
+            District: districtName || inc.place_text || `${inc.latitude}, ${inc.longitude}`,
+            Reporter: u ? `${u.full_name || "Citizen"} (${u.email})` : "Guest reporter",
+            Description: inc.description.slice(0, 300),
+          },
+          fallbackSupportEmail: store.settings.support_email,
+        });
+        await runIncidentIntelligencePipeline(store, inc.id);
       });
-      // Non-blocking AI Intelligence + Deterministic Routing execution so citizen receives Reference ID immediately
-      saveStore(store);
-      void runIncidentIntelligencePipeline(store, inc.id);
-      return NextResponse.json(incidentOut(store, inc, { similar, guestCode: guestTrackingCode }), { status: 201 });
+      return noStoreJson(incidentOut(store, inc, { similar, guestCode: guestTrackingCode }), { status: 201 });
     }
   }
 
@@ -1673,7 +1833,8 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
           link: "/report",
         });
       }
-      return NextResponse.json(incidentOut(store, inc));
+      invalidateCache("incidents_public");
+      return noStoreJson(incidentOut(store, inc));
     }
     if (method === "DELETE") {
       const admin = requireAdmin(req, store);
@@ -1681,6 +1842,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       if (!inc) return err(404, "Report not found");
       store.incidents = store.incidents.filter((i) => i.id !== iid);
       addAudit(store, admin.id, "delete", "incident", iid, { code: inc.code });
+      invalidateCache("incidents_public");
       return new NextResponse(null, { status: 204 });
     }
   }
@@ -1703,6 +1865,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       longitude?: number | null;
       simulation_id?: number | null;
       assessment_id?: number | null;
+      stream?: boolean;
     }>(req);
     if (body instanceof NextResponse) return body;
     const message = (body.message ?? "").trim();
@@ -1723,6 +1886,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
 
     const contacts = getContacts();
     const activeAlerts = store.alerts.filter((a) => isAlertActive(a));
+    const dNameMap = new Map(store.districts.map((d) => [d.id, d.name]));
     const ctx: Record<string, unknown> = {
       official_helplines: contacts.helplines.map((h) => ({
         name: h.name,
@@ -1731,15 +1895,15 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
         note: h.note,
       })),
       helplines_note: contacts.disclaimer,
-      active_published_alerts: activeAlerts.slice(0, 10).map((a) => ({
+      active_published_alerts: activeAlerts.slice(0, 6).map((a) => ({
         id: a.id,
-        title: a.title,
+        title: a.title.slice(0, 120),
         severity: a.severity,
         hazard_type: a.hazard_type,
         districts: a.district_ids.length
-          ? a.district_ids.map((id) => store.districts.find((d) => d.id === id)?.name ?? `District ${id}`)
+          ? a.district_ids.map((id) => dNameMap.get(id) ?? `District ${id}`)
           : ["Province-wide"],
-        safety_instructions: a.safety_instructions,
+        safety_instructions: a.safety_instructions.slice(0, 240),
         source: a.source,
       })),
       verified_incidents_count: store.incidents.filter((i) => ["verified", "response_assigned", "resolved"].includes(i.status)).length,
@@ -1758,7 +1922,7 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
           distance_km: Math.round(kmBetween(lat, lon, r.latitude, r.longitude) * 10) / 10,
         }))
         .sort((a, b) => a.distance_km - b.distance_km)
-        .slice(0, 6);
+        .slice(0, 5);
     }
 
     if (resolvedDistrictId) {
@@ -1776,10 +1940,11 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
       }
       ctx.hospital_directory_from_health_department = contacts.hospitals
         .filter((h) => h.district.toLowerCase() === d.name.toLowerCase())
+        .slice(0, 8)
         .map((h) => ({ name: h.name, phone: h.phone }));
       ctx.resources = store.resources
         .filter((r) => r.district_id === d.id)
-        .slice(0, 10)
+        .slice(0, 8)
         .map((r) => ({
           name: r.name,
           type: r.type,
@@ -1807,6 +1972,79 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
     const prompt = `Language: ${langLabel}\nContext (JSON): ${JSON.stringify(ctx)}\nQuestion: ${message}`;
     const startMs = Date.now();
     const usedProvider = resolveProvider(store.aiConfig) ?? "unconfigured";
+    const wantsStream = Boolean(body.stream || req.headers.get("accept")?.includes("text/event-stream"));
+    const disclaimer = "Prototype assistant. Not an official warning source. In an emergency contact local authorities.";
+
+    if (wantsStream) {
+      try {
+        const { stream, provider, model } = await streamAi(prompt, { language, config: store.aiConfig });
+        const enc = new TextEncoder();
+        const readable = new ReadableStream({
+          async start(controller) {
+            let replyChars = 0;
+            try {
+              for await (const delta of stream) {
+                replyChars += delta.length;
+                controller.enqueue(enc.encode(`data: ${JSON.stringify({ delta })}\n\n`));
+              }
+              if (replyChars === 0) {
+                throw new AIFailure("AI provider returned an empty response");
+              }
+              controller.enqueue(enc.encode(`data: ${JSON.stringify({ done: true, language, provider, model, disclaimer })}\n\n`));
+              store.aiLogs.unshift({
+                id: store.nextId.aiLog++,
+                user_id: u?.id ?? null,
+                language,
+                provider,
+                model,
+                district_id: resolvedDistrictId,
+                status: "ok",
+                latency_ms: Date.now() - startMs,
+                prompt_chars: prompt.length,
+                reply_chars: replyChars,
+                error_message: null,
+                created_at: new Date().toISOString(),
+              });
+              if (store.aiLogs.length > 500) store.aiLogs.length = 500;
+              await saveStoreAsync(store, { scopes: ["agent"] });
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : "Streaming interrupted";
+              controller.enqueue(enc.encode(`data: ${JSON.stringify({ error: msg })}\n\n`));
+            } finally {
+              controller.close();
+            }
+          },
+        });
+        return new NextResponse(readable, {
+          status: 200,
+          headers: {
+            "Content-Type": "text/event-stream; charset=utf-8",
+            "Cache-Control": "no-cache, no-transform",
+            Connection: "keep-alive",
+          },
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Unknown AI failure";
+        store.aiLogs.unshift({
+          id: store.nextId.aiLog++,
+          user_id: u?.id ?? null,
+          language,
+          provider: usedProvider,
+          model: store.aiConfig.model,
+          district_id: resolvedDistrictId,
+          status: "error",
+          latency_ms: Date.now() - startMs,
+          prompt_chars: prompt.length,
+          reply_chars: 0,
+          error_message: msg,
+          created_at: new Date().toISOString(),
+        });
+        if (store.aiLogs.length > 500) store.aiLogs.length = 500;
+        if (e instanceof AIUnavailable) return err(503, msg);
+        if (e instanceof AIFailure) return err(502, "The AI provider could not answer right now. Please try again.");
+        return err(500, "Internal server error");
+      }
+    }
 
     try {
       const { reply, provider, model } = await callAi(prompt, { language, config: store.aiConfig });
@@ -1825,11 +2063,11 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
         created_at: new Date().toISOString(),
       });
       if (store.aiLogs.length > 500) store.aiLogs.length = 500;
-      return NextResponse.json({
+      return noStoreJson({
         reply,
         language,
         context_used: ctx,
-        disclaimer: "Prototype assistant. Not an official warning source. In an emergency contact local authorities.",
+        disclaimer,
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Unknown AI failure";
@@ -2241,11 +2479,31 @@ async function handleInner(req: NextRequest, context: { params: Promise<{ path: 
 }
 
 async function handle(req: NextRequest, context: { params: Promise<{ path: string[] }> }): Promise<NextResponse> {
-  const res = await handleInner(req, context);
+  const tStart = performance.now();
+  const { path: segs } = await context.params;
+  const route = segs.join("/");
+  const out = await handleInner(req, context);
+  const res = out instanceof NextResponse ? out : out.res;
+  const storeDurMs = out instanceof NextResponse ? 0 : out.storeDurMs;
+
   const m = req.method.toUpperCase();
-  if (m !== "GET" && m !== "HEAD" && m !== "OPTIONS" && res.status < 400) {
-    await saveStoreAsync(await getStoreAsync());
+  let dbSaveDurMs = 0;
+  // Incident POST & streaming chat handle persistence directly so confirmation returns cleanly without blocking twice
+  const alreadySaved = (m === "POST" && route === "incidents") || res.headers.get("content-type")?.includes("text/event-stream");
+  if (!alreadySaved && m !== "GET" && m !== "HEAD" && m !== "OPTIONS" && res.status < 400) {
+    const tDb = performance.now();
+    await saveStoreAsync(await getStoreAsync(), { scopes: scopesForRoute(route) });
+    dbSaveDurMs = performance.now() - tDb;
   }
+
+  if (!res.headers.has("Cache-Control")) {
+    res.headers.set("Cache-Control", "private, no-store, max-age=0");
+  }
+  const totalDurMs = performance.now() - tStart;
+  const parts = [`total;dur=${totalDurMs.toFixed(1)}`];
+  if (storeDurMs > 0) parts.push(`store;dur=${storeDurMs.toFixed(1)}`);
+  if (dbSaveDurMs > 0) parts.push(`db;dur=${dbSaveDurMs.toFixed(1)}`);
+  res.headers.set("Server-Timing", parts.join(", "));
   return res;
 }
 

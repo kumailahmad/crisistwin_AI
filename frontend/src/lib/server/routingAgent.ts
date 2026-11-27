@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { decryptSecret, maskSecretHint } from "./cryptoSecrets";
 import { pointInGeometry } from "./geo";
+import { invalidateCache } from "./responseCache";
 import { evaluateRoutingRules, findEscalationCandidates } from "./routingEngine";
 import {
   addAudit,
@@ -74,12 +75,42 @@ function parseJsonSafe<T>(text: string): T | null {
   }
 }
 
+async function groqFetchWithRetry(bodyObj: Record<string, unknown>, groqKey: string, timeoutMs = 20_000): Promise<Response> {
+  const payloadStr = JSON.stringify(bodyObj);
+  for (const attempt of [0, 1]) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), timeoutMs);
+    try {
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${groqKey}`,
+        },
+        body: payloadStr,
+        signal: ctl.signal,
+      });
+      if ([429, 500, 502, 503].includes(res.status) && attempt === 0) {
+        await new Promise((r) => setTimeout(r, 1000));
+        continue;
+      }
+      if (!res.ok) throw new Error(`Groq returned HTTP ${res.status}`);
+      return res;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  throw new Error("Groq request exhausted retries");
+}
+
+const MAX_VISION_BYTES = 1_500_000;
+
 async function analyzePhotosWithGroqVision(
   inc: StoredIncident,
   visionModel: string,
   groqKey: string
 ): Promise<{ summary: string; model: string }> {
-  const images = inc.media_blobs.slice(0, 2);
+  const images = inc.media_blobs.filter((b) => b.data.length > 0 && b.data.length <= MAX_VISION_BYTES).slice(0, 2);
   if (images.length === 0) return { summary: "", model: visionModel };
 
   const content: Record<string, unknown>[] = [
@@ -98,32 +129,21 @@ async function analyzePhotosWithGroqVision(
     });
   }
 
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), 25_000);
-  try {
-    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${groqKey}`,
-      },
-      body: JSON.stringify({
-        model: visionModel,
-        temperature: 0.1,
-        max_tokens: 240,
-        messages: [{ role: "user", content }],
-      }),
-      signal: ctl.signal,
-    });
-    if (!res.ok) throw new Error(`Groq Vision returned HTTP ${res.status}`);
-    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    return {
-      summary: (data.choices?.[0]?.message?.content ?? "").trim().slice(0, 500),
+  const res = await groqFetchWithRetry(
+    {
       model: visionModel,
-    };
-  } finally {
-    clearTimeout(timer);
-  }
+      temperature: 0.1,
+      max_tokens: 220,
+      messages: [{ role: "user", content }],
+    },
+    groqKey,
+    22_000
+  );
+  const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+  return {
+    summary: (data.choices?.[0]?.message?.content ?? "").trim().slice(0, 500),
+    model: visionModel,
+  };
 }
 
 async function classifyIncidentWithGroq(
@@ -138,73 +158,62 @@ async function classifyIncidentWithGroq(
   confidence: number;
   reasoning: string;
 }> {
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), 25_000);
-  try {
-    const prompt = [
-      `Reported category: ${inc.type}`,
-      `Reported severity: ${inc.severity}`,
-      `District: ${districtName || "Unknown"}`,
-      `People affected: ${inc.people_affected ?? "Not specified"}`,
-      `Description: ${inc.description}`,
-      imageSummary ? `Visual photo analysis: ${imageSummary}` : "Visual photo analysis: None",
-      `Allowed categories: ${Array.from(ALLOWED_TYPES).join(", ")}`,
-      `Allowed severities: low, medium, high, critical`,
-      `Respond ONLY with valid JSON: {"recommended_category":"...","recommended_severity":"...","confidence":0.0,"reasoning":"1 short factual sentence"}. Never invent department names or contacts.`,
-    ].join("\n");
+  const prompt = [
+    `Reported category: ${inc.type}`,
+    `Reported severity: ${inc.severity}`,
+    `District: ${districtName || "Unknown"}`,
+    `People affected: ${inc.people_affected ?? "Not specified"}`,
+    `Description: ${inc.description.slice(0, 1200)}`,
+    imageSummary ? `Visual photo analysis: ${imageSummary}` : "Visual photo analysis: None",
+    `Allowed categories: ${Array.from(ALLOWED_TYPES).join(", ")}`,
+    `Allowed severities: low, medium, high, critical`,
+    `Respond ONLY with valid JSON: {"recommended_category":"...","recommended_severity":"...","confidence":0.0,"reasoning":"1 short factual sentence"}. Never invent department names or contacts.`,
+  ].join("\n");
 
-    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${groqKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        temperature: 0.1,
-        max_tokens: 250,
-        response_format: { type: "json_object" },
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are an emergency triage classifier for Balochistan Disaster Management. Output only strict JSON classifying the incident category and severity based strictly on the provided report and image analysis.",
-          },
-          { role: "user", content: prompt },
-        ],
-      }),
-      signal: ctl.signal,
-    });
-    if (!res.ok) throw new Error(`Groq classification returned HTTP ${res.status}`);
-    const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-    const rawText = data.choices?.[0]?.message?.content ?? "";
-    const parsed = parseJsonSafe<{
-      recommended_category?: string;
-      recommended_severity?: string;
-      confidence?: number;
-      reasoning?: string;
-    }>(rawText);
-    if (!parsed) throw new Error("Groq classification returned invalid JSON");
+  const res = await groqFetchWithRetry(
+    {
+      model,
+      temperature: 0.1,
+      max_tokens: 220,
+      response_format: { type: "json_object" },
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are an emergency triage classifier for Balochistan Disaster Management. Output only strict JSON classifying the incident category and severity based strictly on the provided report and image analysis.",
+        },
+        { role: "user", content: prompt },
+      ],
+    },
+    groqKey,
+    20_000
+  );
+  const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+  const rawText = data.choices?.[0]?.message?.content ?? "";
+  const parsed = parseJsonSafe<{
+    recommended_category?: string;
+    recommended_severity?: string;
+    confidence?: number;
+    reasoning?: string;
+  }>(rawText);
+  if (!parsed) throw new Error("Groq classification returned invalid JSON");
 
-    const cat = ALLOWED_TYPES.has(parsed.recommended_category as IncidentType)
-      ? (parsed.recommended_category as IncidentType)
-      : inc.type;
-    const sev = ALLOWED_SEVERITIES.has(parsed.recommended_severity as IncidentSeverity)
-      ? (parsed.recommended_severity as IncidentSeverity)
-      : inc.severity;
-    const conf =
-      typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
-        ? Math.min(1, Math.max(0, Math.round(parsed.confidence * 100) / 100))
-        : 0.7;
-    return {
-      recommended_category: cat,
-      recommended_severity: sev,
-      confidence: conf,
-      reasoning: (parsed.reasoning ?? "Classified via Groq").trim().slice(0, 320),
-    };
-  } finally {
-    clearTimeout(timer);
-  }
+  const cat = ALLOWED_TYPES.has(parsed.recommended_category as IncidentType)
+    ? (parsed.recommended_category as IncidentType)
+    : inc.type;
+  const sev = ALLOWED_SEVERITIES.has(parsed.recommended_severity as IncidentSeverity)
+    ? (parsed.recommended_severity as IncidentSeverity)
+    : inc.severity;
+  const conf =
+    typeof parsed.confidence === "number" && Number.isFinite(parsed.confidence)
+      ? Math.min(1, Math.max(0, Math.round(parsed.confidence * 100) / 100))
+      : 0.7;
+  return {
+    recommended_category: cat,
+    recommended_severity: sev,
+    confidence: conf,
+    reasoning: (parsed.reasoning ?? "Classified via Groq").trim().slice(0, 320),
+  };
 }
 
 export interface DepartmentDispatchPayload {
@@ -699,6 +708,7 @@ export async function runIncidentIntelligencePipeline(
     });
     if (store.agentExecutionLogs.length > 300) store.agentExecutionLogs.length = 300;
     inc.processing_lock_at = null;
+    await saveStoreAsync(store, { scopes: ["incidents", "agent"] });
     return;
   }
 
@@ -784,7 +794,7 @@ export async function runIncidentIntelligencePipeline(
     });
     if (store.agentExecutionLogs.length > 300) store.agentExecutionLogs.length = 300;
     inc.processing_lock_at = null;
-    await saveStoreAsync(store);
+    await saveStoreAsync(store, { scopes: ["incidents", "notifications", "agent"] });
     return;
   }
 
@@ -840,7 +850,7 @@ export async function runIncidentIntelligencePipeline(
     });
     if (store.agentExecutionLogs.length > 300) store.agentExecutionLogs.length = 300;
     inc.processing_lock_at = null;
-    await saveStoreAsync(store);
+    await saveStoreAsync(store, { scopes: ["incidents", "notifications", "agent"] });
     return;
   }
 
@@ -918,7 +928,29 @@ export async function runIncidentIntelligencePipeline(
   });
   if (store.agentExecutionLogs.length > 300) store.agentExecutionLogs.length = 300;
   inc.processing_lock_at = null;
-  await saveStoreAsync(store);
+  invalidateCache("incidents_public");
+  await saveStoreAsync(store, {
+    scopes: ["incidents", "assignments", "notifications", "integrations", "agent", "audit"],
+  });
+}
+
+/** Recover pending or stale-locked incidents (>45s) idempotently when coordinator views load. */
+export async function recoverStalePendingIncidents(store: Store, maxBatch = 3): Promise<number> {
+  if (!store.agentConfig?.enabled) return 0;
+  const now = Date.now();
+  const stale = store.incidents
+    .filter(
+      (i) =>
+        (i.ai_analysis_status === "pending" ||
+          (i.ai_analysis_status === "processing" && i.processing_lock_at && now - i.processing_lock_at > 45_000)) &&
+        !store.incidentAssignments.some((a) => a.incident_id === i.id && a.status !== "rejected")
+    )
+    .slice(0, maxBatch);
+  if (stale.length === 0) return 0;
+  for (const inc of stale) {
+    await runIncidentIntelligencePipeline(store, inc.id);
+  }
+  return stale.length;
 }
 
 /**
@@ -994,7 +1026,7 @@ export async function runEscalationCheck(store: Store): Promise<number> {
   }
 
   if (triggered > 0) {
-    await saveStoreAsync(store);
+    await saveStoreAsync(store, { scopes: ["assignments", "incidents", "notifications", "integrations", "agent", "audit"] });
   }
   return triggered;
 }

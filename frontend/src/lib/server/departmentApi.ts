@@ -4,11 +4,13 @@ import { evaluateRoutingRules } from "./routingEngine";
 import {
   dispatchDepartmentNotifications,
   integrationToPublic,
+  recoverStalePendingIncidents,
   retryNotificationLog,
   runEscalationCheck,
   runIncidentIntelligencePipeline,
   testNotificationIntegration,
 } from "./routingAgent";
+import { invalidateCache } from "./responseCache";
 import { addAudit, notifyAdmins, pushNotification, type Store, type StoredIncident, type StoredUser } from "./store";
 import { validateHttpsExternalUrl } from "./supabaseDb";
 import type {
@@ -166,9 +168,13 @@ export async function handleDepartmentRoutes(params: {
 
     // ---- A. DEPARTMENTS ----
     if (route === "department-manager/departments" && method === "GET") {
+      const counts = new Map<number, number>();
+      for (const a of store.incidentAssignments) {
+        counts.set(a.department_id, (counts.get(a.department_id) ?? 0) + 1);
+      }
       const list = store.departments.map((d) => ({
         ...d,
-        incident_count: store.incidentAssignments.filter((a) => a.department_id === d.id).length,
+        incident_count: counts.get(d.id) ?? 0,
       }));
       return NextResponse.json(list);
     }
@@ -699,6 +705,7 @@ export async function handleDepartmentRoutes(params: {
 
     // ---- E. ASSIGNMENT MONITORING & MANUAL / RE-RUN ACTIONS ----
     if (route === "department-manager/assignments" && method === "GET") {
+      await recoverStalePendingIncidents(store, 3);
       await runEscalationCheck(store);
       const sp = req.nextUrl.searchParams;
       const did = sp.get("district_id") ? Number(sp.get("district_id")) : null;
@@ -843,6 +850,7 @@ export async function handleDepartmentRoutes(params: {
       if (body.send_notification !== false) {
         await dispatchDepartmentNotifications(store, inc, dept, assignment, "incident_assigned");
       }
+      invalidateCache("incidents_public");
       return NextResponse.json(assignment, { status: 201 });
     }
 
@@ -1113,6 +1121,7 @@ export async function handleDepartmentRoutes(params: {
         });
       }
 
+      invalidateCache("incidents_public");
       return NextResponse.json({
         assignment,
         incident: sanitizeIncidentForDepartment(inc),

@@ -1,4 +1,5 @@
 "use client";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
@@ -32,14 +33,27 @@ import {
   Textarea,
   useToast,
 } from "@/components/ui";
-import { LocationPicker, type Picked } from "@/components/incidents/LocationPicker";
-import { EvidencePhoto, PhotoPicker } from "@/components/incidents/Photos";
-import { TrackReportBox } from "@/components/incidents/TrackReportBox";
+import type { Picked } from "@/components/incidents/LocationPicker";
+import { EvidencePhoto } from "@/components/incidents/Photos";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { saveGuestReceipt } from "@/lib/auth/token";
 import { cn } from "@/lib/cn";
+import { findStaticDistrictCentroid, STATIC_DISTRICTS } from "@/lib/data/districtsStatic";
 import { fmtDate, useAsync } from "@/lib/hooks";
-import { incidents, loadOpenBoundaries } from "@/lib/services";
+import { incidents } from "@/lib/services";
+
+const LocationPicker = dynamic(
+  () => import("@/components/incidents/LocationPicker").then((m) => m.LocationPicker),
+  { ssr: false, loading: () => <Skeleton className="h-[360px] w-full" /> }
+);
+const PhotoPicker = dynamic(
+  () => import("@/components/incidents/Photos").then((m) => m.PhotoPicker),
+  { ssr: false, loading: () => <Skeleton className="h-44 w-full" /> }
+);
+const TrackReportBox = dynamic(
+  () => import("@/components/incidents/TrackReportBox").then((m) => m.TrackReportBox),
+  { ssr: false, loading: () => <Skeleton className="h-44 w-full" /> }
+);
 import {
   INCIDENT_TYPES,
   SEVERITY,
@@ -109,10 +123,12 @@ export default function ReportEmergencyPage() {
   const mine = useAsync(
     () => (user ? incidents.mine().catch(() => []) : Promise.resolve([])),
     [user?.id],
-    user ? `my-incidents-${user.id}` : undefined
+    user ? `my-incidents-${user.id}` : undefined,
+    { enabled: Boolean(user), ttlMs: 15_000 }
   );
-  const pub = useAsync(() => incidents.public().catch(() => []), [], "public-incidents");
-  const geoDistricts = useAsync(() => loadOpenBoundaries(), [], "report-districts");
+  const pub = useAsync(() => incidents.public().catch(() => []), [], "public-incidents", {
+    ttlMs: 30_000,
+  });
 
   useEffect(() => {
     setDrafts(loadOfflineDrafts());
@@ -131,8 +147,7 @@ export default function ReportEmergencyPage() {
     setManualDistrict(name);
     setStepErr(null);
     if (!name) return;
-    const feat = geoDistricts.data?.features.find((f) => f.properties.name === name);
-    const c = feat?.properties.centroid;
+    const c = findStaticDistrictCentroid(name);
     if (c && c.length >= 2) {
       setLoc({ lat: c[1], lon: c[0], source: "manual" });
       if (!place.trim()) setPlace(`${name} district (manual selection)`);
@@ -431,7 +446,11 @@ export default function ReportEmergencyPage() {
                 AI Analysis Status
               </p>
               <p className="mt-1 text-sm font-semibold text-ct-text">
-                Not automatically run — queued for human coordinator triage
+                {done.ai_analysis_status === "pending" || done.ai_analysis_status === "processing"
+                  ? "Queued asynchronously in background — coordinator triage active"
+                  : done.ai_analysis_status === "completed"
+                    ? "Completed — attached to coordinator dossier"
+                    : "Queued for human coordinator triage"}
               </p>
             </div>
           </div>
@@ -595,8 +614,8 @@ export default function ReportEmergencyPage() {
                       aria-label="Manually select district"
                     >
                       <option value="">Select a Balochistan district…</option>
-                      {(geoDistricts.data?.features ?? [])
-                        .map((f) => f.properties.name)
+                      {[...STATIC_DISTRICTS]
+                        .map((d) => d.name)
                         .sort((a, b) => a.localeCompare(b))
                         .map((name) => (
                           <option key={name} value={name}>

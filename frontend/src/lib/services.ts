@@ -277,6 +277,92 @@ export const assistant = {
     simulation_id?: number | null;
     assessment_id?: number | null;
   }) => api<ChatReply>("/assistant/chat", { method: "POST", json: b }),
+  chatStream: async (
+    b: {
+      message: string;
+      language: AssistantLanguage;
+      district_id?: number | null;
+      latitude?: number | null;
+      longitude?: number | null;
+      simulation_id?: number | null;
+      assessment_id?: number | null;
+    },
+    onDelta: (chunk: string) => void,
+    signal?: AbortSignal
+  ): Promise<ChatReply> => {
+    const { API_URL } = await import("@/lib/config");
+    const { getToken } = await import("@/lib/auth/token");
+    const h = new Headers({ "Content-Type": "application/json", Accept: "text/event-stream" });
+    const t = getToken();
+    if (t) h.set("Authorization", `Bearer ${t}`);
+
+    const r = await fetch(`${API_URL}/assistant/chat`, {
+      method: "POST",
+      headers: h,
+      credentials: "include",
+      body: JSON.stringify({ ...b, stream: true }),
+      signal,
+    });
+
+    if (!r.ok) {
+      let detail = `Request failed (${r.status})`;
+      try {
+        const errBody = (await r.json()) as { detail?: string };
+        if (errBody?.detail) detail = errBody.detail;
+      } catch {
+        /* ignore */
+      }
+      const err = new Error(detail) as Error & { status?: number };
+      err.status = r.status;
+      throw err;
+    }
+
+    const ct = r.headers.get("content-type") ?? "";
+    if (!ct.includes("text/event-stream") || !r.body) {
+      const json = (await r.json()) as ChatReply;
+      if (json.reply) onDelta(json.reply);
+      return json;
+    }
+
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let fullReply = "";
+    let disclaimer = "";
+
+    const processLine = (raw: string) => {
+      const line = raw.trim();
+      if (!line.startsWith("data:")) return;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === "[DONE]") return;
+      try {
+        const ev = JSON.parse(payload) as { delta?: string; done?: boolean; disclaimer?: string; error?: string };
+        if (ev.error) throw new Error(ev.error);
+        if (ev.delta) {
+          fullReply += ev.delta;
+          onDelta(ev.delta);
+        }
+        if (ev.disclaimer) disclaimer = ev.disclaimer;
+      } catch (err) {
+        if (err instanceof Error && err.message && !err.message.includes("JSON")) throw err;
+      }
+    };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) processLine(line);
+    }
+    if (buffer.trim()) processLine(buffer);
+    if (!fullReply.trim()) {
+      throw new Error("No response was received from the AI provider. Please try again.");
+    }
+
+    return { reply: fullReply, language: b.language, context_used: {}, disclaimer };
+  },
 };
 
 export const reports = {

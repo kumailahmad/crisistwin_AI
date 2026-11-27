@@ -1,4 +1,5 @@
 "use client";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState } from "react";
@@ -15,8 +16,12 @@ import {
   Search,
   Siren,
 } from "lucide-react";
-import { MapView } from "@/components/map/MapView";
 import { TYPE_META } from "@/components/map/typeMeta";
+
+const MapView = dynamic(
+  () => import("@/components/map/MapView").then((m) => m.MapView),
+  { ssr: false, loading: () => <Skeleton className="h-[560px]" /> }
+);
 import {
   Badge,
   Button,
@@ -34,10 +39,10 @@ import {
 } from "@/components/ui";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { cn } from "@/lib/cn";
+import { STATIC_DISTRICT_OPTIONS } from "@/lib/data/districtsStatic";
 import { useAsync } from "@/lib/hooks";
-import { useMapData } from "@/lib/mapData";
-import { resources } from "@/lib/services";
-import type { AvailabilityStatus } from "@/lib/types";
+import { districts as districtsApi, resources } from "@/lib/services";
+import type { AvailabilityStatus, Resource } from "@/lib/types";
 
 type Helpline = {
   id: string;
@@ -78,7 +83,6 @@ function GetHelpContent() {
   const { demo } = useAuth();
   const toast = useToast();
   const sp = useSearchParams();
-  const m = useMapData();
 
   const initialTab = sp.get("tab") === "contacts" ? "contacts" : "facilities";
   const initialType = sp.get("type") === "rescue" ? "rescue_center" : sp.get("type") || "all";
@@ -102,6 +106,28 @@ function GetHelpContent() {
     }
   }, [sp]);
 
+  const dsQuery = useAsync(
+    () => districtsApi.list().catch(() => STATIC_DISTRICT_OPTIONS),
+    [],
+    "districts",
+    { initialData: STATIC_DISTRICT_OPTIONS, ttlMs: 300_000 }
+  );
+  const districtsList = dsQuery.data ?? STATIC_DISTRICT_OPTIONS;
+
+  const baseResQuery = useAsync(
+    () => (demo ? Promise.resolve([] as Resource[]) : resources.list()),
+    [demo],
+    demo ? undefined : "resources-all",
+    { enabled: tab === "facilities" && !myPos && !demo, ttlMs: 30_000 }
+  );
+
+  const boundariesQuery = useAsync(
+    () => districtsApi.boundaries(districtsList),
+    [districtsList],
+    "boundaries-all",
+    { enabled: showMap && tab === "facilities", ttlMs: 300_000 }
+  );
+
   const contactsQuery = useAsync(
     () =>
       fetch("/data/emergency_contacts.json").then((r) => {
@@ -109,17 +135,19 @@ function GetHelpContent() {
         return r.json() as Promise<ContactsDirectory>;
       }),
     [],
-    "help-contacts"
+    "help-contacts",
+    { enabled: tab === "contacts", ttlMs: 300_000 }
   );
 
   const sorted = useAsync(
     () =>
       myPos && !demo ? resources.list({ lat: myPos.lat, lon: myPos.lon }) : Promise.resolve(null),
     [myPos?.lat, myPos?.lon, demo],
-    "sorted-res"
+    undefined,
+    { enabled: Boolean(myPos) && !demo }
   );
 
-  const allFacilities = sorted.data ?? m.data?.resources ?? [];
+  const allFacilities = sorted.data ?? baseResQuery.data ?? [];
   const filteredFacilities = useMemo(
     () =>
       allFacilities.filter(
@@ -133,8 +161,8 @@ function GetHelpContent() {
   );
 
   const dn = useMemo(
-    () => new Map((m.data?.districts ?? []).map((d) => [d.id, d.name])),
-    [m.data?.districts]
+    () => new Map(districtsList.map((d) => [d.id, d.name])),
+    [districtsList]
   );
 
   const contactDistricts = useMemo(
@@ -172,7 +200,7 @@ function GetHelpContent() {
     );
   }
 
-  if (m.error) return <ErrorState message={m.error} onRetry={m.reload} />;
+  if (baseResQuery.error) return <ErrorState message={baseResQuery.error} onRetry={baseResQuery.reload} />;
 
   return (
     <div className="space-y-6">
@@ -313,7 +341,7 @@ function GetHelpContent() {
                   aria-label="Filter by district"
                 >
                   <option value="">All districts</option>
-                  {(m.data?.districts ?? []).map((d) => (
+                  {districtsList.map((d) => (
                     <option key={d.id} value={d.id}>
                       {d.name}
                     </option>
@@ -321,7 +349,7 @@ function GetHelpContent() {
                 </Select>
               </div>
 
-              {m.loading || sorted.loading ? (
+              {baseResQuery.loading || sorted.loading ? (
                 <div className="space-y-3 p-4">
                   <Skeleton className="h-24" />
                   <Skeleton className="h-24" />
@@ -418,9 +446,9 @@ function GetHelpContent() {
 
             {showMap && (
               <div>
-                {m.data ? (
+                {boundariesQuery.data ? (
                   <MapView
-                    boundaries={m.data.boundaries}
+                    boundaries={boundariesQuery.data.fc}
                     riskByName={{}}
                     resources={filteredFacilities}
                     focus={myPos ? { lat: myPos.lat, lon: myPos.lon, label: "Your location" } : null}

@@ -2,7 +2,7 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { hashPassword } from "./auth";
-import { getDbStatus, initAndLoadPostgresStore, saveStoreToDatabase } from "./supabaseDb";
+import { getDbStatus, initAndLoadPostgresStore, saveStoreToDatabase, type SyncScope } from "./supabaseDb";
 import type {
   AgentConfiguration,
   AgentExecutionLog,
@@ -351,7 +351,12 @@ function createInitialStore(seededFromDb?: Store | null): Store {
     // Re-sync environment-derived provider/SMTP flags and env admin credentials without wiping user data
     const freshAi = defaultAiConfig();
     const dbStatus = getDbStatus();
-    persisted.aiConfig = { ...persisted.aiConfig, groq_configured: freshAi.groq_configured, gemini_configured: freshAi.gemini_configured };
+    persisted.aiConfig = {
+      ...persisted.aiConfig,
+      provider_active: freshAi.provider_active,
+      groq_configured: freshAi.groq_configured,
+      gemini_configured: freshAi.gemini_configured,
+    };
     persisted.settings.smtp_configured = Boolean(process.env.SMTP_HOST?.trim() || process.env.RESEND_API_KEY?.trim());
     persisted.settings.ai_provider_configured = Boolean(persisted.aiConfig.provider_active);
     persisted.settings.persistence_mode = dbStatus.connected ? dbStatus.mode : "file-backed-tmp";
@@ -501,10 +506,23 @@ export async function getStoreAsync(): Promise<Store> {
   return g.__ctStoreInitPromise;
 }
 
-export async function saveStoreAsync(store: Store): Promise<void> {
+export async function saveStoreAsync(store: Store, opts: { scopes?: SyncScope[] } = {}): Promise<void> {
   saveStore(store);
-  const status = await saveStoreToDatabase(store);
+  const status = await saveStoreToDatabase(store, opts);
   store.settings.persistence_mode = status.connected ? status.mode : "file-backed-tmp";
+}
+
+export async function getPublicAlertsCached(): Promise<(AlertItem & { district_names?: string[] })[]> {
+  const store = await getStoreAsync();
+  const dMap = new Map(store.districts.map((d) => [d.id, d.name]));
+  const now = Date.now();
+  return store.alerts
+    .filter((a) => a.status === "published" && (!a.expires_at || new Date(a.expires_at).getTime() > now))
+    .slice(0, 20)
+    .map((a) => ({
+      ...a,
+      district_names: a.district_ids.map((id) => dMap.get(id) ?? `District ${id}`),
+    }));
 }
 
 export function addAudit(

@@ -12,7 +12,12 @@ import {
   verifyOpaqueSecret,
   verifyPassword,
 } from "../server/auth";
-import { inBalochistan, kmBetween, pointInGeometry, validatePolygon } from "../server/geo";
+import { geometryBBox, inBalochistan, kmBetween, pointInGeometry, validatePolygon } from "../server/geo";
+import { boundAiPrompt, MAX_AI_PROMPT_CHARS } from "../server/ai";
+import { cachedPublicJson, invalidateCache, noStoreJson } from "../server/responseCache";
+import { recoverStalePendingIncidents } from "../server/routingAgent";
+import { getStore } from "../server/store";
+import { NextRequest } from "next/server";
 import {
   classifyDatabaseUrl,
   normalizeDatabaseUrl,
@@ -451,6 +456,90 @@ test("findEscalationCandidates flags overdue unacknowledged assignments and igno
     last_escalated_at: "2026-11-27T11:55:00Z",
   };
   assert.equal(findEscalationCandidates([recentlyEscalated], rules, nowMs).length, 0);
+});
+
+test("geometryBBox memoizes bounds and speeds up outside-bbox pointInGeometry rejections", () => {
+  const poly: GeoJSON.MultiPolygon = {
+    type: "MultiPolygon",
+    coordinates: [
+      [[[66.0, 30.0], [67.0, 30.0], [67.0, 31.0], [66.0, 31.0], [66.0, 30.0]]],
+      [[[68.0, 29.0], [68.5, 29.0], [68.5, 29.5], [68.0, 29.5], [68.0, 29.0]]],
+    ],
+  };
+  const b1 = geometryBBox(poly);
+  const b2 = geometryBBox(poly);
+  assert.equal(b1, b2); // WeakMap memoized reference
+  assert.deepEqual(b1, [66.0, 29.0, 68.5, 31.0]);
+  assert.equal(pointInGeometry(30.5, 66.5, poly), true);
+  assert.equal(pointInGeometry(29.2, 68.25, poly), true);
+  assert.equal(pointInGeometry(25.0, 62.0, poly), false);
+});
+
+test("responseCache serves ETag, honors If-None-Match 304, invalidates by tag, and marks noStoreJson private", async () => {
+  let runs = 0;
+  const req1 = new NextRequest("http://localhost:3000/api/v1/alerts");
+  const r1 = cachedPublicJson(req1, {
+    tag: "alerts",
+    key: "unit-test",
+    maxAge: 30,
+    sMaxAge: 60,
+    swr: 120,
+    compute: () => ({ count: ++runs }),
+  });
+  assert.equal(r1.status, 200);
+  const etag = r1.headers.get("ETag");
+  assert.ok(etag);
+  assert.match(r1.headers.get("Cache-Control") ?? "", /s-maxage=60/);
+
+  const req2 = new NextRequest("http://localhost:3000/api/v1/alerts", {
+    headers: { "if-none-match": etag! },
+  });
+  const r2 = cachedPublicJson(req2, {
+    tag: "alerts",
+    key: "unit-test",
+    maxAge: 30,
+    sMaxAge: 60,
+    swr: 120,
+    compute: () => ({ count: ++runs }),
+  });
+  assert.equal(r2.status, 304);
+  assert.equal(runs, 1); // Snapshot reused without recomputation
+
+  invalidateCache("alerts");
+  const r3 = cachedPublicJson(req2, {
+    tag: "alerts",
+    key: "unit-test",
+    maxAge: 30,
+    sMaxAge: 60,
+    swr: 120,
+    compute: () => ({ count: ++runs }),
+  });
+  assert.equal(r3.status, 200);
+  assert.equal(runs, 2);
+
+  const priv = noStoreJson({ secret: true });
+  assert.equal(priv.headers.get("Cache-Control"), "private, no-store, max-age=0");
+});
+
+test("boundAiPrompt caps context size while keeping the user question intact", () => {
+  const bigContext = "X".repeat(MAX_AI_PROMPT_CHARS + 5000);
+  const prompt = `${bigContext}\nQuestion: Where is the nearest hospital in Quetta?`;
+  const bounded = boundAiPrompt(prompt);
+  assert.ok(bounded.length <= MAX_AI_PROMPT_CHARS);
+  assert.ok(bounded.endsWith("Question: Where is the nearest hospital in Quetta?"));
+});
+
+test("recoverStalePendingIncidents exits immediately when agent disabled or no stale jobs", async () => {
+  const store = getStore();
+  const prev = store.agentConfig.enabled;
+  try {
+    store.agentConfig.enabled = false;
+    assert.equal(await recoverStalePendingIncidents(store, 3), 0);
+    store.agentConfig.enabled = true;
+    assert.equal(await recoverStalePendingIncidents(store, 3), 0);
+  } finally {
+    store.agentConfig.enabled = prev;
+  }
 });
 
 

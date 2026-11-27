@@ -29,10 +29,10 @@ const FILTERS: { v: IncidentStatus | ""; l: string }[] = [
 export default function AdminIncidents() {
   const toast = useToast();
   const [status, setStatus] = useState<IncidentStatus | "">("pending");
-  const list = useAsync(() => incidents.list(status), [status]);
-  const allInc = useAsync(() => incidents.list(""), []);
-  const stats = useAsync(() => incidents.stats(), []);
   const [sel, setSel] = useState<Incident | null>(null);
+  const list = useAsync(() => incidents.list(status), [status]);
+  const allInc = useAsync(() => incidents.list(""), [], undefined, { enabled: Boolean(sel) });
+  const stats = useAsync(() => incidents.stats(), []);
   const [note, setNote] = useState("");
   const [team, setTeam] = useState("");
   const [dupOf, setDupOf] = useState("");

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">CrisisTwin AI</string>
+    <string name="offline_title">Connection Unavailable</string>
+    <string name="offline_body">Could not reach the live CrisisTwin AI portal right now. Check your network connection and retry, or place an emergency call below.</string>
+    <string name="action_retry">Retry Connection</string>
+    <string name="action_call_police">Call Police 15</string>
+    <string name="action_call_rescue">Call Rescue 1122</string>
+    <string name="action_refresh">Reload portal</string>
+    <string name="cd_app_logo">CrisisTwin AI shield logo</string>
+    <string name="cd_offline_icon">Offline network indicator</string>
+    <string name="cd_call_icon">Emergency phone call icon</string>
+    <string name="cd_refresh_icon">Refresh portal icon</string>
+</resources>

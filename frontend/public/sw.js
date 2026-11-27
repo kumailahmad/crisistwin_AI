@@ -1,12 +1,6 @@
-const CACHE_NAME = "crisistwin-shell-v1";
+const CACHE_NAME = "crisistwin-shell-v2";
 const PRECACHE_URLS = [
-  "/",
   "/offline",
-  "/emergency",
-  "/data/districts.geojson",
-  "/data/balochistan.geojson",
-  "/data/drainage.geojson",
-  "/data/emergency_contacts.json",
   "/pwa-192x192.png",
   "/pwa-512x512.png",
 ];

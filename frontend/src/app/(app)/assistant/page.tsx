@@ -29,9 +29,11 @@ import { cn } from "@/lib/cn";
 import { useAsync } from "@/lib/hooks";
 import { useCitizenLocation } from "@/lib/hooks/useCitizenLocation";
 import { assistant, districts } from "@/lib/services";
+import { STATIC_DISTRICT_OPTIONS } from "@/lib/data/districtsStatic";
 import type { AssistantLanguage } from "@/lib/types";
 
 type Msg = {
+  id?: string;
   role: "user" | "assistant";
   text: string;
   lang: AssistantLanguage;
@@ -107,8 +109,11 @@ function getSpeechConstructor(): (new () => SpeechRecLike) | null {
 function AssistantContent() {
   const { user } = useAuth();
   const sp = useSearchParams();
-  const ds = useAsync(() => districts.list(), [], "districts");
-  const loc = useCitizenLocation(ds.data ?? []);
+  const ds = useAsync(() => districts.list().catch(() => STATIC_DISTRICT_OPTIONS), [], "districts", {
+    initialData: STATIC_DISTRICT_OPTIONS,
+    ttlMs: 300_000,
+  });
+  const loc = useCitizenLocation(ds.data ?? STATIC_DISTRICT_OPTIONS);
 
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [text, setText] = useState("");
@@ -121,6 +126,7 @@ function AssistantContent() {
   const [speechSupported, setSpeechSupported] = useState(false);
 
   const recRef = useRef<SpeechRecLike | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const storeKey = `${STORE_KEY}_${user?.id ?? "guest"}`;
 
@@ -132,6 +138,7 @@ function AssistantContent() {
   useEffect(() => {
     setSpeechSupported(Boolean(getSpeechConstructor()));
     return () => {
+      abortRef.current?.abort();
       try {
         recRef.current?.stop();
       } catch {
@@ -226,35 +233,51 @@ function AssistantContent() {
   async function send(t = text) {
     const clean = t.trim();
     if (!clean || busy) return;
-    setMsgs((m) => [...m, { role: "user", text: clean, lang }]);
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+
+    const replyId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setMsgs((m) => [
+      ...m,
+      { id: `${replyId}-u`, role: "user", text: clean, lang },
+      { id: replyId, role: "assistant", text: "", lang },
+    ]);
     setText("");
     setBusy(true);
+
     try {
-      const r = await assistant.chat({
-        message: clean,
-        language: lang,
-        district_id: district ? Number(district) : null,
-        latitude: shareLocation && loc.lat != null ? loc.lat : null,
-        longitude: shareLocation && loc.lon != null ? loc.lon : null,
-      });
-      setMsgs((m) => [...m, { role: "assistant", text: r.reply, lang }]);
-    } catch (e) {
-      const err = e as { status?: number; message: string };
-      setMsgs((m) => [
-        ...m,
+      await assistant.chatStream(
         {
-          role: "assistant",
-          lang,
-          error: true,
-          text:
-            err.status === 503
-              ? "The AI assistant is temporarily unavailable or not configured on the server. Please check Official Alerts or Emergency Help for verified information."
-              : err.status === 429
-                ? "Too many requests right now. Please wait a minute and try again."
-                : err.message,
+          message: clean,
+          language: lang,
+          district_id: district ? Number(district) : null,
+          latitude: shareLocation && loc.lat != null ? loc.lat : null,
+          longitude: shareLocation && loc.lon != null ? loc.lon : null,
         },
-      ]);
+        (delta) => {
+          setMsgs((prev) =>
+            prev.map((msg) => (msg.id === replyId ? { ...msg, text: msg.text + delta } : msg))
+          );
+        },
+        ac.signal
+      );
+    } catch (e) {
+      if ((e as { name?: string })?.name === "AbortError") return;
+      const err = e as { status?: number; message: string };
+      const errText =
+        err.status === 503
+          ? "The AI assistant is temporarily unavailable or not configured on the server. Please check Official Alerts or Emergency Help for verified information."
+          : err.status === 429
+            ? "Too many requests right now. Please wait a minute and try again."
+            : err.message;
+      setMsgs((prev) =>
+        prev.map((msg) =>
+          msg.id === replyId ? { id: replyId, role: "assistant", lang, error: true, text: errText } : msg
+        )
+      );
     } finally {
+      if (abortRef.current === ac) abortRef.current = null;
       setBusy(false);
     }
   }
@@ -289,7 +312,16 @@ function AssistantContent() {
                 </button>
               ))}
             </div>
-            <Button variant="outline" size="sm" onClick={() => setMsgs([])} disabled={!msgs.length}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                abortRef.current?.abort();
+                setBusy(false);
+                setMsgs([]);
+              }}
+              disabled={!msgs.length}
+            >
               <RotateCcw className="h-3.5 w-3.5" />
               New chat
             </Button>

@@ -18,15 +18,20 @@ import { Button, buttonClasses } from "@/components/ui";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { useAsync } from "@/lib/hooks";
 import { alerts as alertsApi, incidents as incidentsApi } from "@/lib/services";
+import type { AlertItem } from "@/lib/types";
 
-export function CitizenDashboard() {
+export function CitizenDashboard({ initialAlerts }: { initialAlerts?: AlertItem[] }) {
   const { user, guestChosen, continueAsGuest } = useAuth();
 
-  const publicAlerts = useAsync(() => alertsApi.list().catch(() => []), [], "home-alerts");
+  const publicAlerts = useAsync(() => alertsApi.list().catch(() => []), [], "home-alerts", {
+    initialData: initialAlerts ?? null,
+    ttlMs: 30_000,
+  });
   const myReports = useAsync(
     () => (user ? incidentsApi.mine().catch(() => []) : Promise.resolve([])),
     [user?.id],
-    user ? `home-reports-${user.id}` : undefined
+    user ? `home-reports-${user.id}` : undefined,
+    { enabled: Boolean(user), ttlMs: 15_000 }
   );
 
   const alertCount = publicAlerts.data?.length ?? 0;

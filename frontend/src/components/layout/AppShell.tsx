@@ -28,10 +28,10 @@ import { cn } from "@/lib/cn";
 import { Skeleton } from "@/components/ui";
 import { Logo } from "./Logo";
 import { NetworkOfflineBanner, PWAInstallButton } from "@/components/pwa/PWAProvider";
-import { districts as districtsApi, notifications as notifApi } from "@/lib/services";
+import { notifications as notifApi } from "@/lib/services";
 import { attachAndroidBackHandler } from "@/lib/native/capacitor";
 import { useTheme } from "@/lib/theme/ThemeContext";
-import { useAsync } from "@/lib/hooks";
+import { STATIC_DISTRICT_OPTIONS, findStaticDistrictName } from "@/lib/data/districtsStatic";
 import { useCitizenLocation } from "@/lib/hooks/useCitizenLocation";
 
 const CITIZEN_NAV = [
@@ -64,6 +64,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [offline, setOffline] = useState(false);
   const [unread, setUnread] = useState(0);
   const signingOut = useRef(false);
+  const lastNotifFetchRef = useRef<{ uid: number; at: number } | null>(null);
 
   const isAdminZone = path.startsWith("/admin");
   const isDepartmentZone = path.startsWith("/department");
@@ -71,12 +72,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     isAdminZone || isDepartmentZone || TECHNICAL_ROUTES.some((r) => path === r || path.startsWith(r + "/"));
   const isHome = !isAdminZone && !isDepartmentZone && (path === "/" || path === "/dashboard");
 
-  const ds = useAsync(() => districtsApi.list().catch(() => []), [], "shell-districts");
-  const loc = useCitizenLocation(ds.data ?? []);
-  const activeDistrictName = useMemo(() => {
-    if (!loc.selectedDistrictId) return null;
-    return (ds.data ?? []).find((d) => d.id === loc.selectedDistrictId)?.name ?? null;
-  }, [ds.data, loc.selectedDistrictId]);
+  const loc = useCitizenLocation(STATIC_DISTRICT_OPTIONS);
+  const activeDistrictName = useMemo(
+    () => findStaticDistrictName(loc.selectedDistrictId),
+    [loc.selectedDistrictId]
+  );
 
   async function handleSignOut() {
     signingOut.current = true;
@@ -121,9 +121,20 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!user) {
       setUnread(0);
+      lastNotifFetchRef.current = null;
+      return;
+    }
+    const now = Date.now();
+    if (
+      lastNotifFetchRef.current &&
+      lastNotifFetchRef.current.uid === user.id &&
+      now - lastNotifFetchRef.current.at < 30_000 &&
+      path !== "/notifications"
+    ) {
       return;
     }
     let alive = true;
+    lastNotifFetchRef.current = { uid: user.id, at: now };
     notifApi
       .list()
       .then((res) => {
@@ -499,7 +510,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             isHome && "flex-1 lg:flex lg:min-h-0 lg:flex-col lg:py-4"
           )}
         >
-          <div key={path} className={cn("animate-fadeUp", isHome && "flex-1 lg:flex lg:min-h-0 lg:flex-col")}>
+          <div className={cn(isHome && "flex-1 lg:flex lg:min-h-0 lg:flex-col")}>
             {children}
           </div>
         </main>

@@ -8,6 +8,80 @@ import { cn } from "@/lib/cn";
 import { INCIDENT_TYPES, RISK_COLORS, SEVERITY, STATUS_LABEL, type Incident, type Resource } from "@/lib/types";
 import type { BoundaryCollection } from "@/lib/services";
 
+let drainagePromise: Promise<GeoJSON.FeatureCollection | null> | null = null;
+function loadDrainage(): Promise<GeoJSON.FeatureCollection | null> {
+  if (!drainagePromise) {
+    drainagePromise = fetch("/data/drainage.geojson")
+      .then((r) => (r.ok ? (r.json() as Promise<GeoJSON.FeatureCollection>) : null))
+      .catch(() => null);
+  }
+  return drainagePromise;
+}
+
+function geometryCenter(geom: GeoJSON.Geometry): [number, number] | null {
+  let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+  const walk = (c: unknown) => {
+    if (!Array.isArray(c) || c.length === 0) return;
+    if (typeof c[0] === "number" && typeof c[1] === "number") {
+      const lon = c[0], lat = c[1];
+      if (lat < minLat) minLat = lat;
+      if (lat > maxLat) maxLat = lat;
+      if (lon < minLon) minLon = lon;
+      if (lon > maxLon) maxLon = lon;
+    } else {
+      for (const item of c) walk(item);
+    }
+  };
+  if ("coordinates" in geom) walk(geom.coordinates);
+  return Number.isFinite(minLat) ? [(minLat + maxLat) / 2, (minLon + maxLon) / 2] : null;
+}
+
+type ClusterBucket<T> = {
+  key: string;
+  lat: number;
+  lon: number;
+  items: T[];
+};
+
+function clusterByGrid<T extends { latitude: number; longitude: number }>(items: T[], zoom: number): ClusterBucket<T>[] {
+  if (zoom >= 10 || items.length <= 12) {
+    return items.map((item, idx) => ({ key: `single-${idx}`, lat: item.latitude, lon: item.longitude, items: [item] }));
+  }
+  const stepDeg = Math.max(0.08, 3.2 / Math.pow(2, zoom - 5));
+  const buckets = new Map<string, { sumLat: number; sumLon: number; items: T[] }>();
+  for (const item of items) {
+    const gx = Math.floor(item.longitude / stepDeg);
+    const gy = Math.floor(item.latitude / stepDeg);
+    const key = `${gx}:${gy}`;
+    let b = buckets.get(key);
+    if (!b) {
+      b = { sumLat: 0, sumLon: 0, items: [] };
+      buckets.set(key, b);
+    }
+    b.sumLat += item.latitude;
+    b.sumLon += item.longitude;
+    b.items.push(item);
+  }
+  const out: ClusterBucket<T>[] = [];
+  for (const [key, b] of buckets.entries()) {
+    out.push({
+      key,
+      lat: b.sumLat / b.items.length,
+      lon: b.sumLon / b.items.length,
+      items: b.items,
+    });
+  }
+  return out;
+}
+
+const clusterIcon = (count: number, bg: string) =>
+  L.divIcon({
+    className: "",
+    html: `<div style="display:grid;place-items:center;width:32px;height:32px;border-radius:9999px;background:${bg};color:#0B1424;font-weight:800;font-size:12px;border:2px solid #fff;box-shadow:0 4px 12px rgba(0,0,0,.45)">${count}</div>`,
+    iconSize: [32, 32],
+    iconAnchor: [16, 16],
+  });
+
 export type MapProps = {
   boundaries: BoundaryCollection | null;
   riskByName?: Record<string, string>;
@@ -74,7 +148,13 @@ function Labels({ data }: { data: BoundaryCollection | null }) {
   const [zoom, setZoom] = useState(map.getZoom());
   useMapEvents({ zoomend: () => setZoom(map.getZoom()) });
   const pts = useMemo(
-    () => (data?.features ?? []).map((f) => ({ name: f.properties.name, at: L.geoJSON(f).getBounds().getCenter() })),
+    () =>
+      (data?.features ?? [])
+        .map((f) => {
+          const at = geometryCenter(f.geometry);
+          return at ? { name: f.properties.name, at } : null;
+        })
+        .filter((x): x is { name: string; at: [number, number] } => Boolean(x)),
     [data]
   );
   if (zoom < 7) return null;
@@ -89,6 +169,122 @@ function Labels({ data }: { data: BoundaryCollection | null }) {
           icon={L.divIcon({ className: "dist-label", html: p.name, iconSize: [0, 0] })}
         />
       ))}
+    </>
+  );
+}
+
+function RadarOverlayWatcher({ onRequestRadar }: { onRequestRadar: () => void }) {
+  useMapEvents({
+    overlayadd: (e) => {
+      if (e.name.startsWith("Rain radar")) {
+        onRequestRadar();
+      }
+    },
+  });
+  return null;
+}
+
+function ClusteredMarkers({
+  resources,
+  incidents,
+  showResources,
+  markers,
+}: {
+  resources: Resource[];
+  incidents: Incident[];
+  showResources: boolean;
+  markers: Record<string, L.DivIcon>;
+}) {
+  const map = useMap();
+  const [zoom, setZoom] = useState(map.getZoom());
+  useMapEvents({ zoomend: () => setZoom(map.getZoom()) });
+
+  const resClusters = useMemo(
+    () => (showResources ? clusterByGrid(resources, zoom) : []),
+    [showResources, resources, zoom]
+  );
+  const incClusters = useMemo(
+    () => clusterByGrid(incidents, zoom),
+    [incidents, zoom]
+  );
+
+  return (
+    <>
+      {showResources && (
+        <LayersControl.Overlay checked name="Emergency resources">
+          <LayerGroup>
+            {resClusters.map((bucket) =>
+              bucket.items.length > 1 ? (
+                <Marker
+                  key={`res-cluster-${bucket.key}`}
+                  position={[bucket.lat, bucket.lon]}
+                  icon={clusterIcon(bucket.items.length, "#21C7D9")}
+                  eventHandlers={{
+                    click: () => map.setView([bucket.lat, bucket.lon], Math.min(12, zoom + 3)),
+                  }}
+                />
+              ) : (
+                (() => {
+                  const r = bucket.items[0];
+                  return (
+                    <Marker key={r.id} position={[r.latitude, r.longitude]} icon={markers[r.type] ?? markers.other}>
+                      <Popup>
+                        <div className="space-y-0.5">
+                          <strong className="text-sm">{r.name}</strong>
+                          <div>{TYPE_META[r.type]?.label ?? r.type}</div>
+                          <div>{r.phone ?? "No phone on record"}</div>
+                          {r.address && <div>{r.address}</div>}
+                          {r.availability_status && <div className="text-xs capitalize text-cyan-300">Status: {r.availability_status}</div>}
+                          <div className={r.verified ? "text-emerald-300" : "text-amber-300"}>{r.verified ? "Verified record" : "Unverified record"}</div>
+                        </div>
+                      </Popup>
+                    </Marker>
+                  );
+                })()
+              )
+            )}
+          </LayerGroup>
+        </LayersControl.Overlay>
+      )}
+
+      {incidents.length > 0 && (
+        <LayersControl.Overlay checked name={`Reported incidents (${incidents.length})`}>
+          <LayerGroup>
+            {incClusters.map((bucket) =>
+              bucket.items.length > 1 ? (
+                <Marker
+                  key={`inc-cluster-${bucket.key}`}
+                  position={[bucket.lat, bucket.lon]}
+                  icon={clusterIcon(bucket.items.length, "#E9A23B")}
+                  eventHandlers={{
+                    click: () => map.setView([bucket.lat, bucket.lon], Math.min(12, zoom + 3)),
+                  }}
+                />
+              ) : (
+                (() => {
+                  const i = bucket.items[0];
+                  return (
+                    <Marker key={`inc${i.id}`} position={[i.latitude, i.longitude]} icon={incIcon(i)}>
+                      <Popup>
+                        <div className="max-w-[230px] space-y-1">
+                          <strong className="text-sm">{INCIDENT_TYPES.find((t) => t.value === i.type)?.label}</strong>
+                          <div className="text-slate-300">{i.description}</div>
+                          <div className="text-emerald-300">
+                            {STATUS_LABEL[i.status]} · {SEVERITY[i.severity].label}
+                          </div>
+                          <div className="text-slate-400">
+                            {i.district_name ?? ""} {new Date(i.created_at).toLocaleDateString()}
+                          </div>
+                        </div>
+                      </Popup>
+                    </Marker>
+                  );
+                })()
+              )
+            )}
+          </LayerGroup>
+        </LayersControl.Overlay>
+      )}
     </>
   );
 }
@@ -190,22 +386,40 @@ export default function CrisisMap({
 }: MapProps) {
   const [full, setFull] = useState(false);
   const [radar, setRadar] = useState<{ url: string; time: string } | null>(null);
+  const [radarRequested, setRadarRequested] = useState(false);
   const [drainage, setDrainage] = useState<GeoJSON.FeatureCollection | null>(null);
 
   useEffect(() => {
-    fetch("/data/drainage.geojson")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => setDrainage(j))
-      .catch(() => setDrainage(null));
+    let alive = true;
+    loadDrainage().then((j) => {
+      if (alive) setDrainage(j);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
+  useEffect(() => {
+    if (!radarRequested || radar) return;
+    let alive = true;
     fetch("https://api.rainviewer.com/public/weather-maps.json")
       .then((r) => r.json())
       .then((j) => {
         const last = j?.radar?.past?.at(-1);
-        if (last) setRadar({ url: `${j.host}${last.path}/256/{z}/{x}/{y}/2/1_1.png`, time: new Date(last.time * 1000).toLocaleString() });
+        if (alive && last) {
+          setRadar({
+            url: `${j.host}${last.path}/256/{z}/{x}/{y}/2/1_1.png`,
+            time: new Date(last.time * 1000).toLocaleString(),
+          });
+        }
       })
-      .catch(() => setRadar(null));
-  }, []);
+      .catch(() => {
+        if (alive) setRadar(null);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [radarRequested, radar]);
 
   const hasRisk = Object.keys(riskByName).length > 0;
   const geoKey = useMemo(
@@ -281,56 +495,18 @@ export default function CrisisMap({
             </LayersControl.Overlay>
           )}
 
-          {showResources && (
-            <LayersControl.Overlay checked name="Emergency resources">
-              <LayerGroup>
-                {resources.map((r) => (
-                  <Marker key={r.id} position={[r.latitude, r.longitude]} icon={markers[r.type] ?? markers.other}>
-                    <Popup>
-                      <div className="space-y-0.5">
-                        <strong className="text-sm">{r.name}</strong>
-                        <div>{TYPE_META[r.type]?.label ?? r.type}</div>
-                        <div>{r.phone ?? "No phone on record"}</div>
-                        {r.address && <div>{r.address}</div>}
-                        {r.availability_status && <div className="text-xs capitalize text-cyan-300">Status: {r.availability_status}</div>}
-                        <div className={r.verified ? "text-emerald-300" : "text-amber-300"}>{r.verified ? "Verified record" : "Unverified record"}</div>
-                      </div>
-                    </Popup>
-                  </Marker>
-                ))}
-              </LayerGroup>
-            </LayersControl.Overlay>
-          )}
+          <ClusteredMarkers
+            resources={resources}
+            incidents={incidents}
+            showResources={showResources}
+            markers={markers}
+          />
 
-          {incidents.length > 0 && (
-            <LayersControl.Overlay checked name={`Reported incidents (${incidents.length})`}>
-              <LayerGroup>
-                {incidents.map((i) => (
-                  <Marker key={`inc${i.id}`} position={[i.latitude, i.longitude]} icon={incIcon(i)}>
-                    <Popup>
-                      <div className="max-w-[230px] space-y-1">
-                        <strong className="text-sm">{INCIDENT_TYPES.find((t) => t.value === i.type)?.label}</strong>
-                        <div className="text-slate-300">{i.description}</div>
-                        <div className="text-emerald-300">
-                          {STATUS_LABEL[i.status]} · {SEVERITY[i.severity].label}
-                        </div>
-                        <div className="text-slate-400">
-                          {i.district_name ?? ""} {new Date(i.created_at).toLocaleDateString()}
-                        </div>
-                      </div>
-                    </Popup>
-                  </Marker>
-                ))}
-              </LayerGroup>
-            </LayersControl.Overlay>
-          )}
-
-          {radar && (
-            <LayersControl.Overlay name={`Rain radar (observed, ${radar.time})`}>
-              <TileLayer url={radar.url} opacity={0.65} attribution="Radar: RainViewer" />
-            </LayersControl.Overlay>
-          )}
+          <LayersControl.Overlay name={radar ? `Rain radar (observed, ${radar.time})` : "Rain radar (live)"}>
+            {radar ? <TileLayer url={radar.url} opacity={0.65} attribution="Radar: RainViewer" /> : <LayerGroup />}
+          </LayersControl.Overlay>
         </LayersControl>
+        <RadarOverlayWatcher onRequestRadar={() => setRadarRequested(true)} />
         <ScaleControl position="bottomleft" />
         <FitAndFly data={boundaries} selectedName={selectedName} />
         <Labels data={boundaries} />

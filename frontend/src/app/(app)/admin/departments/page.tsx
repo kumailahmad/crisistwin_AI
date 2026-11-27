@@ -1,4 +1,5 @@
 "use client";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -13,17 +14,41 @@ import {
   Shield,
   Webhook,
 } from "lucide-react";
-import { AgentSettingsTab } from "@/components/department-manager/AgentSettingsTab";
-import { AssignmentMonitorTab } from "@/components/department-manager/AssignmentMonitorTab";
-import { DeliveryLogsTab } from "@/components/department-manager/DeliveryLogsTab";
-import { DepartmentDirectoryTab } from "@/components/department-manager/DepartmentDirectoryTab";
-import { EscalationSettingsTab } from "@/components/department-manager/EscalationSettingsTab";
-import { IntegrationsTab } from "@/components/department-manager/IntegrationsTab";
-import { RoutingRulesTab } from "@/components/department-manager/RoutingRulesTab";
 import { Button, ErrorState, PageHeader, Skeleton } from "@/components/ui";
 import { cn } from "@/lib/cn";
+import { STATIC_DISTRICT_OPTIONS } from "@/lib/data/districtsStatic";
 import { useAsync } from "@/lib/hooks";
 import { departmentManager, districts as districtsApi } from "@/lib/services";
+
+const tabLoading = () => <Skeleton className="h-44 w-full" />;
+const DepartmentDirectoryTab = dynamic(
+  () => import("@/components/department-manager/DepartmentDirectoryTab").then((m) => m.DepartmentDirectoryTab),
+  { ssr: false, loading: tabLoading }
+);
+const RoutingRulesTab = dynamic(
+  () => import("@/components/department-manager/RoutingRulesTab").then((m) => m.RoutingRulesTab),
+  { ssr: false, loading: tabLoading }
+);
+const IntegrationsTab = dynamic(
+  () => import("@/components/department-manager/IntegrationsTab").then((m) => m.IntegrationsTab),
+  { ssr: false, loading: tabLoading }
+);
+const AgentSettingsTab = dynamic(
+  () => import("@/components/department-manager/AgentSettingsTab").then((m) => m.AgentSettingsTab),
+  { ssr: false, loading: tabLoading }
+);
+const AssignmentMonitorTab = dynamic(
+  () => import("@/components/department-manager/AssignmentMonitorTab").then((m) => m.AssignmentMonitorTab),
+  { ssr: false, loading: tabLoading }
+);
+const EscalationSettingsTab = dynamic(
+  () => import("@/components/department-manager/EscalationSettingsTab").then((m) => m.EscalationSettingsTab),
+  { ssr: false, loading: tabLoading }
+);
+const DeliveryLogsTab = dynamic(
+  () => import("@/components/department-manager/DeliveryLogsTab").then((m) => m.DeliveryLogsTab),
+  { ssr: false, loading: tabLoading }
+);
 
 type TabId = "directory" | "rules" | "integrations" | "agent" | "monitoring" | "escalations" | "logs";
 
@@ -53,11 +78,43 @@ function DepartmentManagerInner() {
   });
   const [logFilters, setLogFilters] = useState({ channel: "", status: "" });
 
-  const deptsQ = useAsync(() => departmentManager.listDepartments(), []);
-  const districtsQ = useAsync(() => districtsApi.list().catch(() => []), []);
-  const rulesQ = useAsync(() => departmentManager.listRules(), []);
-  const intgsQ = useAsync(() => departmentManager.listIntegrations(), []);
-  const agentQ = useAsync(() => departmentManager.getAgentConfig(), []);
+  const needsDepts =
+    activeTab === "directory" ||
+    activeTab === "rules" ||
+    activeTab === "integrations" ||
+    activeTab === "monitoring" ||
+    activeTab === "escalations";
+
+  const deptsQ = useAsync(
+    () => departmentManager.listDepartments(),
+    [],
+    "admin-depts",
+    { enabled: needsDepts, ttlMs: 15_000 }
+  );
+  const districtsQ = useAsync(
+    () => districtsApi.list().catch(() => STATIC_DISTRICT_OPTIONS),
+    [],
+    "districts",
+    { initialData: STATIC_DISTRICT_OPTIONS, ttlMs: 300_000 }
+  );
+  const rulesQ = useAsync(
+    () => departmentManager.listRules(),
+    [],
+    "admin-dept-rules",
+    { enabled: activeTab === "rules", ttlMs: 15_000 }
+  );
+  const intgsQ = useAsync(
+    () => departmentManager.listIntegrations(),
+    [],
+    "admin-dept-intgs",
+    { enabled: activeTab === "integrations", ttlMs: 15_000 }
+  );
+  const agentQ = useAsync(
+    () => departmentManager.getAgentConfig(),
+    [],
+    "admin-dept-agent",
+    { enabled: activeTab === "agent", ttlMs: 10_000 }
+  );
   const assignQ = useAsync(
     () =>
       departmentManager.getAssignments({
@@ -75,28 +132,37 @@ function DepartmentManagerInner() {
       monitorFilters.severity,
       monitorFilters.from,
       monitorFilters.to,
-    ]
+    ],
+    undefined,
+    { enabled: activeTab === "monitoring" }
   );
-  const escQ = useAsync(() => departmentManager.getEscalations(), []);
+  const escQ = useAsync(
+    () => departmentManager.getEscalations(),
+    [],
+    "admin-dept-esc",
+    { enabled: activeTab === "escalations", ttlMs: 15_000 }
+  );
   const logsQ = useAsync(
     () =>
       departmentManager.listDeliveryLogs({
         channel: logFilters.channel || undefined,
         status: logFilters.status || undefined,
       }),
-    [logFilters.channel, logFilters.status]
+    [logFilters.channel, logFilters.status],
+    undefined,
+    { enabled: activeTab === "logs" }
   );
 
   const [tick, setTick] = useState(0);
   useEffect(() => {
     if (tick === 0) return;
-    deptsQ.reload();
-    rulesQ.reload();
-    intgsQ.reload();
-    agentQ.reload();
-    assignQ.reload();
-    escQ.reload();
-    logsQ.reload();
+    if (needsDepts) deptsQ.reload();
+    if (activeTab === "rules") rulesQ.reload();
+    if (activeTab === "integrations") intgsQ.reload();
+    if (activeTab === "agent") agentQ.reload();
+    if (activeTab === "monitoring") assignQ.reload();
+    if (activeTab === "escalations") escQ.reload();
+    if (activeTab === "logs") logsQ.reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tick]);
 

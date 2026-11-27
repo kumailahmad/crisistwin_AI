@@ -1,6 +1,7 @@
 "use client";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { Download, Share, Smartphone, WifiOff, X } from "lucide-react";
+import { WebVitalsTracker } from "./WebVitalsTracker";
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -97,6 +98,7 @@ export function PWAProvider({ children }: { children: React.ReactNode }) {
         setShowGuide,
       }}
     >
+      <WebVitalsTracker />
       {children}
       {showGuide && (
         <div

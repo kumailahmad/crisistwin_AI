@@ -2,6 +2,17 @@ import { Pool } from "pg";
 import type { Store, StoredIncident, StoredUser } from "./store";
 
 export type PersistenceMode = "supabase-postgres" | "postgres" | "supabase-rest" | "file-backed-tmp";
+export type SyncScope =
+  | "users"
+  | "departments"
+  | "incidents"
+  | "routingRules"
+  | "assignments"
+  | "integrations"
+  | "agent"
+  | "alerts"
+  | "notifications"
+  | "audit";
 
 export interface DbStatus {
   mode: PersistenceMode;
@@ -14,6 +25,8 @@ const g = globalThis as unknown as {
   __ctPgPool?: Pool | null;
   __ctPgPoolKey?: string;
   __ctDbStatus?: DbStatus;
+  __ctReadyPools?: WeakSet<Pool>;
+  __ctSchemaInFlight?: WeakMap<Pool, Promise<void>>;
 };
 
 /** Strip userinfo (username/password) from any URL or error message before logging or returning to UI. */
@@ -187,11 +200,13 @@ function getPool(): Pool | null {
   if (g.__ctPgPool && g.__ctPgPoolKey === dbUrl) return g.__ctPgPool;
 
   const { useSsl } = classifyDatabaseUrl(dbUrl);
+  const maxConn = Math.max(2, Math.min(20, Number(process.env.PG_POOL_MAX || 8)));
   const pool = new Pool({
     connectionString: dbUrl,
-    max: 5,
+    max: maxConn,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 8_000,
+    statement_timeout: 15_000,
     ...(useSsl ? { ssl: { rejectUnauthorized: false } } : {}),
   });
   pool.on("error", (err) => {
@@ -207,7 +222,14 @@ function getPool(): Pool | null {
 }
 
 async function ensureSchema(pool: Pool): Promise<void> {
-  await pool.query(`
+  const ready = (g.__ctReadyPools ??= new WeakSet<Pool>());
+  if (ready.has(pool)) return;
+  const inflight = (g.__ctSchemaInFlight ??= new WeakMap<Pool, Promise<void>>());
+  const existing = inflight.get(pool);
+  if (existing) return existing;
+
+  const task = (async () => {
+    await pool.query(`
     CREATE TABLE IF NOT EXISTS ct_app_state (
       id TEXT PRIMARY KEY,
       payload JSONB NOT NULL,
@@ -480,6 +502,14 @@ async function ensureSchema(pool: Pool): Promise<void> {
     );
     CREATE INDEX IF NOT EXISTS idx_agent_exec_idem ON agent_execution_logs(idempotency_key);
 
+    CREATE INDEX IF NOT EXISTS idx_ct_users_role_active ON ct_users(role, is_active);
+    CREATE INDEX IF NOT EXISTS idx_ct_incidents_status_dist_created ON ct_incidents(status, district_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ct_incidents_user ON ct_incidents(user_id);
+    CREATE INDEX IF NOT EXISTS idx_ct_incidents_workflow ON ct_incidents(workflow_status, assigned_department_id);
+    CREATE INDEX IF NOT EXISTS idx_ct_alerts_status_pub ON ct_alerts(status, published_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ct_notifications_user_read ON ct_notifications(user_id, read, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ct_audit_logs_created ON ct_audit_logs(created_at DESC);
+
     ALTER TABLE ct_app_state ENABLE ROW LEVEL SECURITY;
     ALTER TABLE ct_users ENABLE ROW LEVEL SECURITY;
     ALTER TABLE ct_incidents ENABLE ROW LEVEL SECURITY;
@@ -499,6 +529,12 @@ async function ensureSchema(pool: Pool): Promise<void> {
     ALTER TABLE escalation_logs ENABLE ROW LEVEL SECURITY;
     ALTER TABLE agent_execution_logs ENABLE ROW LEVEL SECURITY;
   `);
+    ready.add(pool);
+  })().finally(() => {
+    inflight.delete(pool);
+  });
+  inflight.set(pool, task);
+  return task;
 }
 
 export type SerializedStorePayload = Omit<Store, "boundaries" | "incidents"> & {
@@ -579,7 +615,10 @@ export async function initAndLoadPostgresStore(): Promise<{ store: Store | null;
   }
 }
 
-export async function saveStoreToDatabase(store: Store): Promise<DbStatus> {
+export async function saveStoreToDatabase(
+  store: Store,
+  opts: { scopes?: SyncScope[] } = {}
+): Promise<DbStatus> {
   const pool = getPool();
   if (!pool) {
     const restStatus = await saveViaSupabaseRest(store);
@@ -606,6 +645,9 @@ export async function saveStoreToDatabase(store: Store): Promise<DbStatus> {
 
   if (!client) return g.__ctDbStatus!;
 
+  const syncAll = !opts.scopes || opts.scopes.length === 0;
+  const dirty = new Set<SyncScope>(opts.scopes ?? []);
+
   try {
     await client.query("BEGIN");
     const serialized = serializeStoreForDb(store);
@@ -616,23 +658,29 @@ export async function saveStoreToDatabase(store: Store): Promise<DbStatus> {
       ["primary", JSON.stringify(serialized)]
     );
 
-    // Sync queryable relational tables in FK-safe order so records & RLS stay updated in Supabase
-    await syncUsersTable(client, store.users);
-    await syncDepartmentsTables(client, store.departments);
-    await syncIncidentsTable(client, store.incidents);
-    await syncRoutingRulesTable(client, store.routingRules);
-    await syncAssignmentsAndResponsesTables(client, store.incidentAssignments, store.departmentResponses);
-    await syncIntegrationsAndLogsTables(client, store.notificationIntegrations, store.notificationLogs);
-    await syncAgentAndEscalationTables(
-      client,
-      store.agentConfig,
-      store.escalationRules,
-      store.escalationLogs,
-      store.agentExecutionLogs
-    );
-    await syncAlertsTable(client, store.alerts);
-    await syncNotificationsTable(client, store.notifications);
-    await syncAuditLogsTable(client, store.auditLogs);
+    // Sync only dirty relational tables (or all on cold seed) using bulk unnest upserts
+    if (syncAll || dirty.has("users")) await syncUsersTable(client, store.users);
+    if (syncAll || dirty.has("departments")) await syncDepartmentsTables(client, store.departments);
+    if (syncAll || dirty.has("incidents")) await syncIncidentsTable(client, store.incidents);
+    if (syncAll || dirty.has("routingRules")) await syncRoutingRulesTable(client, store.routingRules);
+    if (syncAll || dirty.has("assignments")) {
+      await syncAssignmentsAndResponsesTables(client, store.incidentAssignments, store.departmentResponses);
+    }
+    if (syncAll || dirty.has("integrations")) {
+      await syncIntegrationsAndLogsTables(client, store.notificationIntegrations, store.notificationLogs);
+    }
+    if (syncAll || dirty.has("agent")) {
+      await syncAgentAndEscalationTables(
+        client,
+        store.agentConfig,
+        store.escalationRules,
+        store.escalationLogs,
+        store.agentExecutionLogs
+      );
+    }
+    if (syncAll || dirty.has("alerts")) await syncAlertsTable(client, store.alerts);
+    if (syncAll || dirty.has("notifications")) await syncNotificationsTable(client, store.notifications);
+    if (syncAll || dirty.has("audit")) await syncAuditLogsTable(client, store.auditLogs);
 
     await client.query("COMMIT");
     const status: DbStatus = {
@@ -667,33 +715,33 @@ async function syncUsersTable(client: Queryable, users: StoredUser[]) {
     return;
   }
   await client.query("DELETE FROM ct_users WHERE NOT (id = ANY($1::int[]))", [ids]);
-  for (const u of users) {
-    await client.query(
-      `INSERT INTO ct_users (id, email, full_name, role, department_id, is_active, email_verified, phone, district_id, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::timestamptz)
-       ON CONFLICT (id) DO UPDATE SET
-         email = EXCLUDED.email,
-         full_name = EXCLUDED.full_name,
-         role = EXCLUDED.role,
-         department_id = EXCLUDED.department_id,
-         is_active = EXCLUDED.is_active,
-         email_verified = EXCLUDED.email_verified,
-         phone = EXCLUDED.phone,
-         district_id = EXCLUDED.district_id`,
-      [
-        u.id,
-        u.email,
-        u.full_name,
-        u.role,
-        u.department_id ?? null,
-        u.is_active,
-        u.email_verified,
-        u.phone,
-        u.district_id,
-        u.created_at,
-      ]
-    );
-  }
+  await client.query(
+    `INSERT INTO ct_users (id, email, full_name, role, department_id, is_active, email_verified, phone, district_id, created_at)
+     SELECT * FROM unnest(
+       $1::int[], $2::text[], $3::text[], $4::text[], $5::int[], $6::boolean[], $7::boolean[], $8::text[], $9::int[], $10::timestamptz[]
+     )
+     ON CONFLICT (id) DO UPDATE SET
+       email = EXCLUDED.email,
+       full_name = EXCLUDED.full_name,
+       role = EXCLUDED.role,
+       department_id = EXCLUDED.department_id,
+       is_active = EXCLUDED.is_active,
+       email_verified = EXCLUDED.email_verified,
+       phone = EXCLUDED.phone,
+       district_id = EXCLUDED.district_id`,
+    [
+      ids,
+      users.map((u) => u.email),
+      users.map((u) => u.full_name),
+      users.map((u) => u.role),
+      users.map((u) => u.department_id ?? null),
+      users.map((u) => u.is_active),
+      users.map((u) => u.email_verified),
+      users.map((u) => u.phone),
+      users.map((u) => u.district_id),
+      users.map((u) => u.created_at),
+    ]
+  );
 }
 
 async function syncIncidentsTable(client: Queryable, incidents: StoredIncident[]) {
@@ -703,38 +751,38 @@ async function syncIncidentsTable(client: Queryable, incidents: StoredIncident[]
     return;
   }
   await client.query("DELETE FROM ct_incidents WHERE NOT (id = ANY($1::int[]))", [ids]);
-  for (const i of incidents) {
-    await client.query(
-      `INSERT INTO ct_incidents (id, code, type, severity, status, workflow_status, assigned_department_id, description, latitude, longitude, district_id, district_name, reporter_type, contact_phone, user_id, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::timestamptz)
-       ON CONFLICT (id) DO UPDATE SET
-         status = EXCLUDED.status,
-         workflow_status = EXCLUDED.workflow_status,
-         assigned_department_id = EXCLUDED.assigned_department_id,
-         severity = EXCLUDED.severity,
-         description = EXCLUDED.description,
-         district_id = EXCLUDED.district_id,
-         district_name = EXCLUDED.district_name`,
-      [
-        i.id,
-        i.code,
-        i.type,
-        i.severity,
-        i.status,
-        i.workflow_status ?? null,
-        i.assigned_department_id ?? null,
-        i.description,
-        i.latitude,
-        i.longitude,
-        i.district_id,
-        i.district_name,
-        i.reporter_type ?? "guest",
-        i.contact_phone,
-        i.user_id,
-        i.created_at,
-      ]
-    );
-  }
+  await client.query(
+    `INSERT INTO ct_incidents (id, code, type, severity, status, workflow_status, assigned_department_id, description, latitude, longitude, district_id, district_name, reporter_type, contact_phone, user_id, created_at)
+     SELECT * FROM unnest(
+       $1::int[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::int[], $8::text[], $9::float8[], $10::float8[], $11::int[], $12::text[], $13::text[], $14::text[], $15::int[], $16::timestamptz[]
+     )
+     ON CONFLICT (id) DO UPDATE SET
+       status = EXCLUDED.status,
+       workflow_status = EXCLUDED.workflow_status,
+       assigned_department_id = EXCLUDED.assigned_department_id,
+       severity = EXCLUDED.severity,
+       description = EXCLUDED.description,
+       district_id = EXCLUDED.district_id,
+       district_name = EXCLUDED.district_name`,
+    [
+      ids,
+      incidents.map((i) => i.code),
+      incidents.map((i) => i.type),
+      incidents.map((i) => i.severity),
+      incidents.map((i) => i.status),
+      incidents.map((i) => i.workflow_status ?? null),
+      incidents.map((i) => i.assigned_department_id ?? null),
+      incidents.map((i) => i.description),
+      incidents.map((i) => i.latitude),
+      incidents.map((i) => i.longitude),
+      incidents.map((i) => i.district_id),
+      incidents.map((i) => i.district_name),
+      incidents.map((i) => i.reporter_type ?? "guest"),
+      incidents.map((i) => i.contact_phone),
+      incidents.map((i) => i.user_id),
+      incidents.map((i) => i.created_at),
+    ]
+  );
 }
 
 async function syncDepartmentsTables(client: Queryable, departments: Store["departments"]) {
@@ -745,68 +793,84 @@ async function syncDepartmentsTables(client: Queryable, departments: Store["depa
     await client.query("DELETE FROM departments");
     return;
   }
-  // Upsert departments first with NULL backup_department_id, then set backup_department_id to avoid FK ordering issues
-  for (const d of departments) {
-    await client.query(
-      `INSERT INTO departments (id, name, description, department_type, supported_categories, primary_contact_name, contact_email, contact_phone, notification_channel, webhook_url, backup_department_id, priority_weight, is_active, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, NULL, $11, $12, $13::timestamptz, $14::timestamptz)
-       ON CONFLICT (id) DO UPDATE SET
-         name = EXCLUDED.name,
-         description = EXCLUDED.description,
-         department_type = EXCLUDED.department_type,
-         supported_categories = EXCLUDED.supported_categories,
-         primary_contact_name = EXCLUDED.primary_contact_name,
-         contact_email = EXCLUDED.contact_email,
-         contact_phone = EXCLUDED.contact_phone,
-         notification_channel = EXCLUDED.notification_channel,
-         webhook_url = EXCLUDED.webhook_url,
-         priority_weight = EXCLUDED.priority_weight,
-         is_active = EXCLUDED.is_active,
-         updated_at = EXCLUDED.updated_at`,
-      [
-        d.id,
-        d.name,
-        d.description,
-        d.department_type,
-        JSON.stringify(d.supported_categories ?? []),
-        d.primary_contact_name,
-        d.contact_email,
-        d.contact_phone,
-        d.notification_channel,
-        d.webhook_url,
-        d.priority_weight,
-        d.is_active,
-        d.created_at,
-        d.updated_at,
-      ]
-    );
-  }
-  for (const d of departments) {
-    await client.query("UPDATE departments SET backup_department_id = $2 WHERE id = $1", [
-      d.id,
-      d.backup_department_id && ids.includes(d.backup_department_id) ? d.backup_department_id : null,
-    ]);
-  }
+  await client.query(
+    `INSERT INTO departments (id, name, description, department_type, supported_categories, primary_contact_name, contact_email, contact_phone, notification_channel, webhook_url, backup_department_id, priority_weight, is_active, created_at, updated_at)
+     SELECT id, name, description, department_type, supported_categories, primary_contact_name, contact_email, contact_phone, notification_channel, webhook_url, NULL::int, priority_weight, is_active, created_at, updated_at
+     FROM unnest(
+       $1::int[], $2::text[], $3::text[], $4::text[], $5::jsonb[], $6::text[], $7::text[], $8::text[], $9::text[], $10::text[], $11::int[], $12::boolean[], $13::timestamptz[], $14::timestamptz[]
+     ) AS v(id, name, description, department_type, supported_categories, primary_contact_name, contact_email, contact_phone, notification_channel, webhook_url, priority_weight, is_active, created_at, updated_at)
+     ON CONFLICT (id) DO UPDATE SET
+       name = EXCLUDED.name,
+       description = EXCLUDED.description,
+       department_type = EXCLUDED.department_type,
+       supported_categories = EXCLUDED.supported_categories,
+       primary_contact_name = EXCLUDED.primary_contact_name,
+       contact_email = EXCLUDED.contact_email,
+       contact_phone = EXCLUDED.contact_phone,
+       notification_channel = EXCLUDED.notification_channel,
+       webhook_url = EXCLUDED.webhook_url,
+       priority_weight = EXCLUDED.priority_weight,
+       is_active = EXCLUDED.is_active,
+       updated_at = EXCLUDED.updated_at`,
+    [
+      ids,
+      departments.map((d) => d.name),
+      departments.map((d) => d.description),
+      departments.map((d) => d.department_type),
+      departments.map((d) => JSON.stringify(d.supported_categories ?? [])),
+      departments.map((d) => d.primary_contact_name),
+      departments.map((d) => d.contact_email),
+      departments.map((d) => d.contact_phone),
+      departments.map((d) => d.notification_channel),
+      departments.map((d) => d.webhook_url),
+      departments.map((d) => d.priority_weight),
+      departments.map((d) => d.is_active),
+      departments.map((d) => d.created_at),
+      departments.map((d) => d.updated_at),
+    ]
+  );
+
+  const idSet = new Set(ids);
+  await client.query(
+    `UPDATE departments AS d SET backup_department_id = v.backup_id
+     FROM unnest($1::int[], $2::int[]) AS v(id, backup_id)
+     WHERE d.id = v.id`,
+    [ids, departments.map((d) => (d.backup_department_id && idSet.has(d.backup_department_id) ? d.backup_department_id : null))]
+  );
 
   await client.query("DELETE FROM department_districts");
+  const ddDept: number[] = [];
+  const ddDist: number[] = [];
   for (const d of departments) {
     for (const did of d.assigned_district_ids ?? []) {
-      await client.query(
-        "INSERT INTO department_districts (department_id, district_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-        [d.id, did]
-      );
+      ddDept.push(d.id);
+      ddDist.push(did);
     }
+  }
+  if (ddDept.length > 0) {
+    await client.query(
+      "INSERT INTO department_districts (department_id, district_id) SELECT * FROM unnest($1::int[], $2::int[]) ON CONFLICT DO NOTHING",
+      [ddDept, ddDist]
+    );
   }
 
   await client.query("DELETE FROM department_contacts");
-  for (const d of departments) {
-    for (const c of d.contacts ?? []) {
-      await client.query(
-        `INSERT INTO department_contacts (id, department_id, name, role_title, email, phone, channel_preference, is_primary)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [c.id, d.id, c.name, c.role_title, c.email, c.phone, c.channel_preference, c.is_primary]
-      );
-    }
+  const cFlat = departments.flatMap((d) => (d.contacts ?? []).map((c) => ({ ...c, deptId: d.id })));
+  if (cFlat.length > 0) {
+    await client.query(
+      `INSERT INTO department_contacts (id, department_id, name, role_title, email, phone, channel_preference, is_primary)
+       SELECT * FROM unnest($1::int[], $2::int[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::boolean[])`,
+      [
+        cFlat.map((c) => c.id),
+        cFlat.map((c) => c.deptId),
+        cFlat.map((c) => c.name),
+        cFlat.map((c) => c.role_title),
+        cFlat.map((c) => c.email),
+        cFlat.map((c) => c.phone),
+        cFlat.map((c) => c.channel_preference),
+        cFlat.map((c) => c.is_primary),
+      ]
+    );
   }
 }
 
@@ -817,51 +881,51 @@ async function syncRoutingRulesTable(client: Queryable, rules: Store["routingRul
     return;
   }
   await client.query("DELETE FROM routing_rules WHERE NOT (id = ANY($1::int[]))", [ids]);
-  for (const r of rules) {
-    await client.query(
-      `INSERT INTO routing_rules (id, name, description, enabled, is_fallback, priority_order, incident_categories, district_ids, severities, min_people_affected, require_photos, keywords, target_department_id, backup_department_id, set_priority, send_notification, escalation_minutes, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14, $15, $16, $17, $18::timestamptz, $19::timestamptz)
-       ON CONFLICT (id) DO UPDATE SET
-         name = EXCLUDED.name,
-         description = EXCLUDED.description,
-         enabled = EXCLUDED.enabled,
-         is_fallback = EXCLUDED.is_fallback,
-         priority_order = EXCLUDED.priority_order,
-         incident_categories = EXCLUDED.incident_categories,
-         district_ids = EXCLUDED.district_ids,
-         severities = EXCLUDED.severities,
-         min_people_affected = EXCLUDED.min_people_affected,
-         require_photos = EXCLUDED.require_photos,
-         keywords = EXCLUDED.keywords,
-         target_department_id = EXCLUDED.target_department_id,
-         backup_department_id = EXCLUDED.backup_department_id,
-         set_priority = EXCLUDED.set_priority,
-         send_notification = EXCLUDED.send_notification,
-         escalation_minutes = EXCLUDED.escalation_minutes,
-         updated_at = EXCLUDED.updated_at`,
-      [
-        r.id,
-        r.name,
-        r.description,
-        r.enabled,
-        r.is_fallback,
-        r.priority_order,
-        JSON.stringify(r.incident_categories ?? []),
-        JSON.stringify(r.district_ids ?? []),
-        JSON.stringify(r.severities ?? []),
-        r.min_people_affected,
-        r.require_photos,
-        r.keywords,
-        r.target_department_id,
-        r.backup_department_id,
-        r.set_priority,
-        r.send_notification,
-        r.escalation_minutes,
-        r.created_at,
-        r.updated_at,
-      ]
-    );
-  }
+  await client.query(
+    `INSERT INTO routing_rules (id, name, description, enabled, is_fallback, priority_order, incident_categories, district_ids, severities, min_people_affected, require_photos, keywords, target_department_id, backup_department_id, set_priority, send_notification, escalation_minutes, created_at, updated_at)
+     SELECT * FROM unnest(
+       $1::int[], $2::text[], $3::text[], $4::boolean[], $5::boolean[], $6::int[], $7::jsonb[], $8::jsonb[], $9::jsonb[], $10::int[], $11::boolean[], $12::text[], $13::int[], $14::int[], $15::text[], $16::boolean[], $17::int[], $18::timestamptz[], $19::timestamptz[]
+     )
+     ON CONFLICT (id) DO UPDATE SET
+       name = EXCLUDED.name,
+       description = EXCLUDED.description,
+       enabled = EXCLUDED.enabled,
+       is_fallback = EXCLUDED.is_fallback,
+       priority_order = EXCLUDED.priority_order,
+       incident_categories = EXCLUDED.incident_categories,
+       district_ids = EXCLUDED.district_ids,
+       severities = EXCLUDED.severities,
+       min_people_affected = EXCLUDED.min_people_affected,
+       require_photos = EXCLUDED.require_photos,
+       keywords = EXCLUDED.keywords,
+       target_department_id = EXCLUDED.target_department_id,
+       backup_department_id = EXCLUDED.backup_department_id,
+       set_priority = EXCLUDED.set_priority,
+       send_notification = EXCLUDED.send_notification,
+       escalation_minutes = EXCLUDED.escalation_minutes,
+       updated_at = EXCLUDED.updated_at`,
+    [
+      ids,
+      rules.map((r) => r.name),
+      rules.map((r) => r.description),
+      rules.map((r) => r.enabled),
+      rules.map((r) => r.is_fallback),
+      rules.map((r) => r.priority_order),
+      rules.map((r) => JSON.stringify(r.incident_categories ?? [])),
+      rules.map((r) => JSON.stringify(r.district_ids ?? [])),
+      rules.map((r) => JSON.stringify(r.severities ?? [])),
+      rules.map((r) => r.min_people_affected),
+      rules.map((r) => r.require_photos),
+      rules.map((r) => r.keywords),
+      rules.map((r) => r.target_department_id),
+      rules.map((r) => r.backup_department_id),
+      rules.map((r) => r.set_priority),
+      rules.map((r) => r.send_notification),
+      rules.map((r) => r.escalation_minutes),
+      rules.map((r) => r.created_at),
+      rules.map((r) => r.updated_at),
+    ]
+  );
 }
 
 async function syncAssignmentsAndResponsesTables(
@@ -876,44 +940,44 @@ async function syncAssignmentsAndResponsesTables(
     return;
   }
   await client.query("DELETE FROM incident_assignments WHERE NOT (id = ANY($1::int[]))", [ids]);
-  for (const a of assignments) {
-    await client.query(
-      `INSERT INTO incident_assignments (id, incident_id, incident_code, department_id, backup_department_id, routing_rule_id, status, priority, assigned_personnel, escalation_minutes, escalated, escalation_level, last_escalated_at, assigned_at, notified_at, acknowledged_at, resolved_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::timestamptz, $14::timestamptz, $15::timestamptz, $16::timestamptz, $17::timestamptz, $18::timestamptz)
-       ON CONFLICT (id) DO UPDATE SET
-         department_id = EXCLUDED.department_id,
-         status = EXCLUDED.status,
-         priority = EXCLUDED.priority,
-         assigned_personnel = EXCLUDED.assigned_personnel,
-         escalated = EXCLUDED.escalated,
-         escalation_level = EXCLUDED.escalation_level,
-         last_escalated_at = EXCLUDED.last_escalated_at,
-         notified_at = EXCLUDED.notified_at,
-         acknowledged_at = EXCLUDED.acknowledged_at,
-         resolved_at = EXCLUDED.resolved_at,
-         updated_at = EXCLUDED.updated_at`,
-      [
-        a.id,
-        a.incident_id,
-        a.incident_code,
-        a.department_id,
-        a.backup_department_id,
-        a.routing_rule_id,
-        a.status,
-        a.priority,
-        a.assigned_personnel,
-        a.escalation_minutes,
-        a.escalated,
-        a.escalation_level,
-        a.last_escalated_at,
-        a.assigned_at,
-        a.notified_at,
-        a.acknowledged_at,
-        a.resolved_at,
-        a.updated_at,
-      ]
-    );
-  }
+  await client.query(
+    `INSERT INTO incident_assignments (id, incident_id, incident_code, department_id, backup_department_id, routing_rule_id, status, priority, assigned_personnel, escalation_minutes, escalated, escalation_level, last_escalated_at, assigned_at, notified_at, acknowledged_at, resolved_at, updated_at)
+     SELECT * FROM unnest(
+       $1::int[], $2::int[], $3::text[], $4::int[], $5::int[], $6::int[], $7::text[], $8::text[], $9::text[], $10::int[], $11::boolean[], $12::int[], $13::timestamptz[], $14::timestamptz[], $15::timestamptz[], $16::timestamptz[], $17::timestamptz[], $18::timestamptz[]
+     )
+     ON CONFLICT (id) DO UPDATE SET
+       department_id = EXCLUDED.department_id,
+       status = EXCLUDED.status,
+       priority = EXCLUDED.priority,
+       assigned_personnel = EXCLUDED.assigned_personnel,
+       escalated = EXCLUDED.escalated,
+       escalation_level = EXCLUDED.escalation_level,
+       last_escalated_at = EXCLUDED.last_escalated_at,
+       notified_at = EXCLUDED.notified_at,
+       acknowledged_at = EXCLUDED.acknowledged_at,
+       resolved_at = EXCLUDED.resolved_at,
+       updated_at = EXCLUDED.updated_at`,
+    [
+      ids,
+      assignments.map((a) => a.incident_id),
+      assignments.map((a) => a.incident_code),
+      assignments.map((a) => a.department_id),
+      assignments.map((a) => a.backup_department_id),
+      assignments.map((a) => a.routing_rule_id),
+      assignments.map((a) => a.status),
+      assignments.map((a) => a.priority),
+      assignments.map((a) => a.assigned_personnel),
+      assignments.map((a) => a.escalation_minutes),
+      assignments.map((a) => a.escalated),
+      assignments.map((a) => a.escalation_level),
+      assignments.map((a) => a.last_escalated_at),
+      assignments.map((a) => a.assigned_at),
+      assignments.map((a) => a.notified_at),
+      assignments.map((a) => a.acknowledged_at),
+      assignments.map((a) => a.resolved_at),
+      assignments.map((a) => a.updated_at),
+    ]
+  );
 
   const rIds = responses.map((r) => r.id);
   if (rIds.length === 0) {
@@ -921,26 +985,26 @@ async function syncAssignmentsAndResponsesTables(
     return;
   }
   await client.query("DELETE FROM department_responses WHERE NOT (id = ANY($1::int[]))", [rIds]);
-  for (const r of responses) {
-    await client.query(
-      `INSERT INTO department_responses (id, assignment_id, incident_id, department_id, user_id, user_name, action, status_after, assigned_personnel, note, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz)
-       ON CONFLICT (id) DO NOTHING`,
-      [
-        r.id,
-        r.assignment_id,
-        r.incident_id,
-        r.department_id,
-        r.user_id,
-        r.user_name,
-        r.action,
-        r.status_after,
-        r.assigned_personnel,
-        r.note,
-        r.created_at,
-      ]
-    );
-  }
+  await client.query(
+    `INSERT INTO department_responses (id, assignment_id, incident_id, department_id, user_id, user_name, action, status_after, assigned_personnel, note, created_at)
+     SELECT * FROM unnest(
+       $1::int[], $2::int[], $3::int[], $4::int[], $5::int[], $6::text[], $7::text[], $8::text[], $9::text[], $10::text[], $11::timestamptz[]
+     )
+     ON CONFLICT (id) DO NOTHING`,
+    [
+      rIds,
+      responses.map((r) => r.assignment_id),
+      responses.map((r) => r.incident_id),
+      responses.map((r) => r.department_id),
+      responses.map((r) => r.user_id),
+      responses.map((r) => r.user_name),
+      responses.map((r) => r.action),
+      responses.map((r) => r.status_after),
+      responses.map((r) => r.assigned_personnel),
+      responses.map((r) => r.note),
+      responses.map((r) => r.created_at),
+    ]
+  );
 }
 
 async function syncIntegrationsAndLogsTables(
@@ -953,47 +1017,47 @@ async function syncIntegrationsAndLogsTables(
     await client.query("DELETE FROM notification_integrations");
   } else {
     await client.query("DELETE FROM notification_integrations WHERE NOT (id = ANY($1::int[]))", [intIds]);
-    for (const i of integrations) {
-      await client.query(
-        `INSERT INTO notification_integrations (id, name, channel, provider_name, enabled, connection_status, last_verified_at, last_error, endpoint_url, sender_identity, default_recipients, event_triggers, department_ids, encrypted_api_key, encrypted_auth_token, account_sid, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $8, $9, $10, $11::jsonb, $12::jsonb, $13::jsonb, $14, $15, $16, $17::timestamptz, $18::timestamptz)
-         ON CONFLICT (id) DO UPDATE SET
-           name = EXCLUDED.name,
-           enabled = EXCLUDED.enabled,
-           connection_status = EXCLUDED.connection_status,
-           last_verified_at = EXCLUDED.last_verified_at,
-           last_error = EXCLUDED.last_error,
-           endpoint_url = EXCLUDED.endpoint_url,
-           sender_identity = EXCLUDED.sender_identity,
-           default_recipients = EXCLUDED.default_recipients,
-           event_triggers = EXCLUDED.event_triggers,
-           department_ids = EXCLUDED.department_ids,
-           encrypted_api_key = EXCLUDED.encrypted_api_key,
-           encrypted_auth_token = EXCLUDED.encrypted_auth_token,
-           account_sid = EXCLUDED.account_sid,
-           updated_at = EXCLUDED.updated_at`,
-        [
-          i.id,
-          i.name,
-          i.channel,
-          i.provider_name,
-          i.enabled,
-          i.connection_status,
-          i.last_verified_at,
-          i.last_error,
-          i.endpoint_url,
-          i.sender_identity,
-          JSON.stringify(i.default_recipients ?? []),
-          JSON.stringify(i.event_triggers ?? []),
-          JSON.stringify(i.department_ids ?? []),
-          i.encrypted_api_key ?? null,
-          i.encrypted_auth_token ?? null,
-          i.account_sid ?? null,
-          i.created_at,
-          i.updated_at,
-        ]
-      );
-    }
+    await client.query(
+      `INSERT INTO notification_integrations (id, name, channel, provider_name, enabled, connection_status, last_verified_at, last_error, endpoint_url, sender_identity, default_recipients, event_triggers, department_ids, encrypted_api_key, encrypted_auth_token, account_sid, created_at, updated_at)
+       SELECT * FROM unnest(
+         $1::int[], $2::text[], $3::text[], $4::text[], $5::boolean[], $6::text[], $7::timestamptz[], $8::text[], $9::text[], $10::text[], $11::jsonb[], $12::jsonb[], $13::jsonb[], $14::text[], $15::text[], $16::text[], $17::timestamptz[], $18::timestamptz[]
+       )
+       ON CONFLICT (id) DO UPDATE SET
+         name = EXCLUDED.name,
+         enabled = EXCLUDED.enabled,
+         connection_status = EXCLUDED.connection_status,
+         last_verified_at = EXCLUDED.last_verified_at,
+         last_error = EXCLUDED.last_error,
+         endpoint_url = EXCLUDED.endpoint_url,
+         sender_identity = EXCLUDED.sender_identity,
+         default_recipients = EXCLUDED.default_recipients,
+         event_triggers = EXCLUDED.event_triggers,
+         department_ids = EXCLUDED.department_ids,
+         encrypted_api_key = EXCLUDED.encrypted_api_key,
+         encrypted_auth_token = EXCLUDED.encrypted_auth_token,
+         account_sid = EXCLUDED.account_sid,
+         updated_at = EXCLUDED.updated_at`,
+      [
+        intIds,
+        integrations.map((i) => i.name),
+        integrations.map((i) => i.channel),
+        integrations.map((i) => i.provider_name),
+        integrations.map((i) => i.enabled),
+        integrations.map((i) => i.connection_status),
+        integrations.map((i) => i.last_verified_at),
+        integrations.map((i) => i.last_error),
+        integrations.map((i) => i.endpoint_url),
+        integrations.map((i) => i.sender_identity),
+        integrations.map((i) => JSON.stringify(i.default_recipients ?? [])),
+        integrations.map((i) => JSON.stringify(i.event_triggers ?? [])),
+        integrations.map((i) => JSON.stringify(i.department_ids ?? [])),
+        integrations.map((i) => i.encrypted_api_key ?? null),
+        integrations.map((i) => i.encrypted_auth_token ?? null),
+        integrations.map((i) => i.account_sid ?? null),
+        integrations.map((i) => i.created_at),
+        integrations.map((i) => i.updated_at),
+      ]
+    );
   }
 
   const recentLogs = logs.slice(0, 500);
@@ -1002,36 +1066,36 @@ async function syncIntegrationsAndLogsTables(
     await client.query("DELETE FROM notification_logs");
   } else {
     await client.query("DELETE FROM notification_logs WHERE NOT (id = ANY($1::int[]))", [logIds]);
-    for (const l of recentLogs) {
-      await client.query(
-        `INSERT INTO notification_logs (id, incident_id, incident_code, assignment_id, department_id, integration_id, channel, recipient, event_type, status, attempt_count, dedupe_key, provider_response, error_message, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::timestamptz, $16::timestamptz)
-         ON CONFLICT (id) DO UPDATE SET
-           status = EXCLUDED.status,
-           attempt_count = EXCLUDED.attempt_count,
-           provider_response = EXCLUDED.provider_response,
-           error_message = EXCLUDED.error_message,
-           updated_at = EXCLUDED.updated_at`,
-        [
-          l.id,
-          l.incident_id,
-          l.incident_code,
-          l.assignment_id,
-          l.department_id,
-          l.integration_id,
-          l.channel,
-          l.recipient,
-          l.event_type,
-          l.status,
-          l.attempt_count,
-          l.dedupe_key,
-          l.provider_response,
-          l.error_message,
-          l.created_at,
-          l.updated_at,
-        ]
-      );
-    }
+    await client.query(
+      `INSERT INTO notification_logs (id, incident_id, incident_code, assignment_id, department_id, integration_id, channel, recipient, event_type, status, attempt_count, dedupe_key, provider_response, error_message, created_at, updated_at)
+       SELECT * FROM unnest(
+         $1::int[], $2::int[], $3::text[], $4::int[], $5::int[], $6::int[], $7::text[], $8::text[], $9::text[], $10::text[], $11::int[], $12::text[], $13::text[], $14::text[], $15::timestamptz[], $16::timestamptz[]
+       )
+       ON CONFLICT (id) DO UPDATE SET
+         status = EXCLUDED.status,
+         attempt_count = EXCLUDED.attempt_count,
+         provider_response = EXCLUDED.provider_response,
+         error_message = EXCLUDED.error_message,
+         updated_at = EXCLUDED.updated_at`,
+      [
+        logIds,
+        recentLogs.map((l) => l.incident_id),
+        recentLogs.map((l) => l.incident_code),
+        recentLogs.map((l) => l.assignment_id),
+        recentLogs.map((l) => l.department_id),
+        recentLogs.map((l) => l.integration_id),
+        recentLogs.map((l) => l.channel),
+        recentLogs.map((l) => l.recipient),
+        recentLogs.map((l) => l.event_type),
+        recentLogs.map((l) => l.status),
+        recentLogs.map((l) => l.attempt_count),
+        recentLogs.map((l) => l.dedupe_key),
+        recentLogs.map((l) => l.provider_response),
+        recentLogs.map((l) => l.error_message),
+        recentLogs.map((l) => l.created_at),
+        recentLogs.map((l) => l.updated_at),
+      ]
+    );
   }
 }
 
@@ -1078,33 +1142,33 @@ async function syncAgentAndEscalationTables(
     await client.query("DELETE FROM escalation_rules");
   } else {
     await client.query("DELETE FROM escalation_rules WHERE NOT (id = ANY($1::int[]))", [erIds]);
-    for (const r of escRules) {
-      await client.query(
-        `INSERT INTO escalation_rules (id, name, enabled, severity, department_id, timeout_minutes, notify_admins, notify_backup_department, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz, $10::timestamptz)
-         ON CONFLICT (id) DO UPDATE SET
-           name = EXCLUDED.name,
-           enabled = EXCLUDED.enabled,
-           severity = EXCLUDED.severity,
-           department_id = EXCLUDED.department_id,
-           timeout_minutes = EXCLUDED.timeout_minutes,
-           notify_admins = EXCLUDED.notify_admins,
-           notify_backup_department = EXCLUDED.notify_backup_department,
-           updated_at = EXCLUDED.updated_at`,
-        [
-          r.id,
-          r.name,
-          r.enabled,
-          r.severity,
-          r.department_id,
-          r.timeout_minutes,
-          r.notify_admins,
-          r.notify_backup_department,
-          r.created_at,
-          r.updated_at,
-        ]
-      );
-    }
+    await client.query(
+      `INSERT INTO escalation_rules (id, name, enabled, severity, department_id, timeout_minutes, notify_admins, notify_backup_department, created_at, updated_at)
+       SELECT * FROM unnest(
+         $1::int[], $2::text[], $3::boolean[], $4::text[], $5::int[], $6::int[], $7::boolean[], $8::boolean[], $9::timestamptz[], $10::timestamptz[]
+       )
+       ON CONFLICT (id) DO UPDATE SET
+         name = EXCLUDED.name,
+         enabled = EXCLUDED.enabled,
+         severity = EXCLUDED.severity,
+         department_id = EXCLUDED.department_id,
+         timeout_minutes = EXCLUDED.timeout_minutes,
+         notify_admins = EXCLUDED.notify_admins,
+         notify_backup_department = EXCLUDED.notify_backup_department,
+         updated_at = EXCLUDED.updated_at`,
+      [
+        erIds,
+        escRules.map((r) => r.name),
+        escRules.map((r) => r.enabled),
+        escRules.map((r) => r.severity),
+        escRules.map((r) => r.department_id),
+        escRules.map((r) => r.timeout_minutes),
+        escRules.map((r) => r.notify_admins),
+        escRules.map((r) => r.notify_backup_department),
+        escRules.map((r) => r.created_at),
+        escRules.map((r) => r.updated_at),
+      ]
+    );
   }
 
   const recentEscLogs = escLogs.slice(0, 300);
@@ -1113,14 +1177,21 @@ async function syncAgentAndEscalationTables(
     await client.query("DELETE FROM escalation_logs");
   } else {
     await client.query("DELETE FROM escalation_logs WHERE NOT (id = ANY($1::int[]))", [elIds]);
-    for (const l of recentEscLogs) {
-      await client.query(
-        `INSERT INTO escalation_logs (id, rule_id, assignment_id, incident_id, department_id, backup_department_id, reason, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz)
-         ON CONFLICT (id) DO NOTHING`,
-        [l.id, l.rule_id, l.assignment_id, l.incident_id, l.department_id, l.backup_department_id, l.reason, l.created_at]
-      );
-    }
+    await client.query(
+      `INSERT INTO escalation_logs (id, rule_id, assignment_id, incident_id, department_id, backup_department_id, reason, created_at)
+       SELECT * FROM unnest($1::int[], $2::int[], $3::int[], $4::int[], $5::int[], $6::int[], $7::text[], $8::timestamptz[])
+       ON CONFLICT (id) DO NOTHING`,
+      [
+        elIds,
+        recentEscLogs.map((l) => l.rule_id),
+        recentEscLogs.map((l) => l.assignment_id),
+        recentEscLogs.map((l) => l.incident_id),
+        recentEscLogs.map((l) => l.department_id),
+        recentEscLogs.map((l) => l.backup_department_id),
+        recentEscLogs.map((l) => l.reason),
+        recentEscLogs.map((l) => l.created_at),
+      ]
+    );
   }
 
   const recentExec = execLogs.slice(0, 300);
@@ -1129,31 +1200,31 @@ async function syncAgentAndEscalationTables(
     await client.query("DELETE FROM agent_execution_logs");
   } else {
     await client.query("DELETE FROM agent_execution_logs WHERE NOT (id = ANY($1::int[]))", [exIds]);
-    for (const l of recentExec) {
-      await client.query(
-        `INSERT INTO agent_execution_logs (id, incident_id, incident_code, idempotency_key, status, provider, model, recommended_category, recommended_severity, confidence, image_summary, matched_rule_id, assigned_department_id, duration_ms, error_message, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16::timestamptz)
-         ON CONFLICT (id) DO NOTHING`,
-        [
-          l.id,
-          l.incident_id,
-          l.incident_code,
-          l.idempotency_key,
-          l.status,
-          l.provider,
-          l.model,
-          l.recommended_category,
-          l.recommended_severity,
-          l.confidence,
-          l.image_summary,
-          l.matched_rule_id,
-          l.assigned_department_id,
-          l.duration_ms,
-          l.error_message,
-          l.created_at,
-        ]
-      );
-    }
+    await client.query(
+      `INSERT INTO agent_execution_logs (id, incident_id, incident_code, idempotency_key, status, provider, model, recommended_category, recommended_severity, confidence, image_summary, matched_rule_id, assigned_department_id, duration_ms, error_message, created_at)
+       SELECT * FROM unnest(
+         $1::int[], $2::int[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $9::text[], $10::float8[], $11::text[], $12::int[], $13::int[], $14::int[], $15::text[], $16::timestamptz[]
+       )
+       ON CONFLICT (id) DO NOTHING`,
+      [
+        exIds,
+        recentExec.map((l) => l.incident_id),
+        recentExec.map((l) => l.incident_code),
+        recentExec.map((l) => l.idempotency_key),
+        recentExec.map((l) => l.status),
+        recentExec.map((l) => l.provider),
+        recentExec.map((l) => l.model),
+        recentExec.map((l) => l.recommended_category),
+        recentExec.map((l) => l.recommended_severity),
+        recentExec.map((l) => l.confidence),
+        recentExec.map((l) => l.image_summary),
+        recentExec.map((l) => l.matched_rule_id),
+        recentExec.map((l) => l.assigned_department_id),
+        recentExec.map((l) => l.duration_ms),
+        recentExec.map((l) => l.error_message),
+        recentExec.map((l) => l.created_at),
+      ]
+    );
   }
 }
 
@@ -1164,18 +1235,25 @@ async function syncAlertsTable(client: Queryable, alerts: Store["alerts"]) {
     return;
   }
   await client.query("DELETE FROM ct_alerts WHERE NOT (id = ANY($1::int[]))", [ids]);
-  for (const a of alerts) {
-    await client.query(
-      `INSERT INTO ct_alerts (id, title, severity, hazard_type, status, source, created_at, published_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz, $8::timestamptz)
-       ON CONFLICT (id) DO UPDATE SET
-         title = EXCLUDED.title,
-         severity = EXCLUDED.severity,
-         status = EXCLUDED.status,
-         published_at = EXCLUDED.published_at`,
-      [a.id, a.title, a.severity, a.hazard_type, a.status, a.source, a.created_at, a.published_at]
-    );
-  }
+  await client.query(
+    `INSERT INTO ct_alerts (id, title, severity, hazard_type, status, source, created_at, published_at)
+     SELECT * FROM unnest($1::int[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::timestamptz[], $8::timestamptz[])
+     ON CONFLICT (id) DO UPDATE SET
+       title = EXCLUDED.title,
+       severity = EXCLUDED.severity,
+       status = EXCLUDED.status,
+       published_at = EXCLUDED.published_at`,
+    [
+      ids,
+      alerts.map((a) => a.title),
+      alerts.map((a) => a.severity),
+      alerts.map((a) => a.hazard_type),
+      alerts.map((a) => a.status),
+      alerts.map((a) => a.source),
+      alerts.map((a) => a.created_at),
+      alerts.map((a) => a.published_at),
+    ]
+  );
 }
 
 async function syncNotificationsTable(client: Queryable, notifications: Store["notifications"]) {
@@ -1186,15 +1264,22 @@ async function syncNotificationsTable(client: Queryable, notifications: Store["n
     return;
   }
   await client.query("DELETE FROM ct_notifications WHERE NOT (id = ANY($1::int[]))", [ids]);
-  for (const n of recent) {
-    await client.query(
-      `INSERT INTO ct_notifications (id, user_id, kind, title, body, link, read, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz)
-       ON CONFLICT (id) DO UPDATE SET
-         read = EXCLUDED.read`,
-      [n.id, n.user_id, n.kind, n.title, n.body, n.link, n.read, n.created_at]
-    );
-  }
+  await client.query(
+    `INSERT INTO ct_notifications (id, user_id, kind, title, body, link, read, created_at)
+     SELECT * FROM unnest($1::int[], $2::int[], $3::text[], $4::text[], $5::text[], $6::text[], $7::boolean[], $8::timestamptz[])
+     ON CONFLICT (id) DO UPDATE SET
+       read = EXCLUDED.read`,
+    [
+      ids,
+      recent.map((n) => n.user_id),
+      recent.map((n) => n.kind),
+      recent.map((n) => n.title),
+      recent.map((n) => n.body),
+      recent.map((n) => n.link),
+      recent.map((n) => n.read),
+      recent.map((n) => n.created_at),
+    ]
+  );
 }
 
 async function syncAuditLogsTable(client: Queryable, logs: Store["auditLogs"]) {
@@ -1205,14 +1290,20 @@ async function syncAuditLogsTable(client: Queryable, logs: Store["auditLogs"]) {
     return;
   }
   await client.query("DELETE FROM ct_audit_logs WHERE NOT (id = ANY($1::int[]))", [ids]);
-  for (const l of recent) {
-    await client.query(
-      `INSERT INTO ct_audit_logs (id, user_id, action, entity, entity_id, detail, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::timestamptz)
-       ON CONFLICT (id) DO NOTHING`,
-      [l.id, l.user_id, l.action, l.entity, l.entity_id, l.detail ? JSON.stringify(l.detail) : null, l.created_at]
-    );
-  }
+  await client.query(
+    `INSERT INTO ct_audit_logs (id, user_id, action, entity, entity_id, detail, created_at)
+     SELECT * FROM unnest($1::int[], $2::int[], $3::text[], $4::text[], $5::int[], $6::jsonb[], $7::timestamptz[])
+     ON CONFLICT (id) DO NOTHING`,
+    [
+      ids,
+      recent.map((l) => l.user_id),
+      recent.map((l) => l.action),
+      recent.map((l) => l.entity),
+      recent.map((l) => l.entity_id),
+      recent.map((l) => (l.detail ? JSON.stringify(l.detail) : null)),
+      recent.map((l) => l.created_at),
+    ]
+  );
 }
 
 async function loadViaSupabaseRest(): Promise<{ store: Store | null; status: DbStatus }> {
